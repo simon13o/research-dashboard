@@ -55,12 +55,14 @@
     .k b { font-size:34px; line-height:1.1; font-weight:800; display:block; color:#1d4ed8; }
 
     .grid { display:grid; gap:10px; grid-template-columns:1.2fr 1fr; }
+    .dashboard-chart-grid { grid-template-columns:1fr; }
     .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; }
     .ctrl { display:flex; align-items:center; gap:8px; color:var(--muted); }
     .ctrl select { width:auto; }
     .icon-btn { width:auto; padding:6px 8px; border:1px solid var(--bd); border-radius:9px; background:#fff; color:#475569; cursor:pointer; transition:.18s ease; }
     .icon-btn:hover { box-shadow:0 8px 16px rgba(15,23,42,.12); color:#1d4ed8; }
     .chart-svg { width:100%; min-width:620px; height:290px; border:1px solid var(--bd); border-radius:12px; background:#fff; box-shadow:inset 0 1px 0 rgba(255,255,255,.9); }
+    .trend-svg { height:380px; }
     .top-svg { height:340px; }
     .empty { color:var(--muted); margin:8px 0 0; }
     .tooltip {
@@ -1152,10 +1154,10 @@
       </details>
     </article>
 
-    <section class="grid">
+    <section class="grid dashboard-chart-grid">
       <article class="card">
         <div class="head"><b>Sales Trend</b><div class="ctrl"><button id="trendZoomBtn" class="icon-btn" title="Zoom">🔍</button>Chart <select id="trendMode"><option value="line" selected>Line</option><option value="bar">Bar</option></select></div></div>
-        <div style="overflow:auto"><svg id="trend" class="chart-svg" viewBox="0 0 860 290"></svg></div><p id="trendEmpty" class="empty" hidden>No data.</p>
+        <div style="overflow:auto"><svg id="trend" class="chart-svg trend-svg" viewBox="0 0 860 380"></svg></div><p id="trendEmpty" class="empty" hidden>No data.</p>
       </article>
       <article class="card">
         <div class="head"><b>TOP Product Sales Comparison</b><div class="ctrl"><button id="prodZoomBtn" class="icon-btn" title="Zoom">🔍</button>Chart <select id="prodMode"><option value="bar">Bar</option><option value="pie">Pie</option></select></div></div>
@@ -1768,16 +1770,33 @@ function truncateLabel(text, maxChars){
   const s = String(text || "");
   return s.length > maxChars ? `${s.slice(0, Math.max(0, maxChars - 3))}...` : s;
 }
+function shouldShowMonthLabel(i, total){
+  if(total <= 6) return true;
+  if(i === 0 || i === total - 1) return true;
+  if(total <= 12) return i % 2 === 0;
+  if(total <= 24) return i % 3 === 0;
+  return i % 6 === 0;
+}
 
 function renderTrend(rows, target = E.trend, opt = {}){
   target.innerHTML = "";
   const isMain = target === E.trend;
   if(!rows.length){ if(isMain) E.trendEmpty.hidden = false; return; }
   if(isMain) E.trendEmpty.hidden = true;
-  const vw = opt.large ? 1180 : 860;
-  const vh = opt.large ? 640 : 340;
-  const m={t:opt.large ? 54 : 46,r:opt.large ? 44 : 30,b:opt.large ? 96 : 82,l:56}, W=vw-m.l-m.r, H=vh-m.t-m.b;
+  const renderedWidth = Math.round(target.getBoundingClientRect().width || target.clientWidth || 860);
+  const vw = opt.large ? 1180 : Math.max(860, renderedWidth);
+  const vh = opt.large ? 640 : (isMain ? 380 : 340);
+  target.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
+  const m={
+    t: opt.large ? 54 : (isMain ? 56 : 46),
+    r: opt.large ? 44 : (isMain ? 44 : 30),
+    b: opt.large ? 112 : (isMain ? 86 : 82),
+    l: 56
+  }, W=vw-m.l-m.r, H=vh-m.t-m.b;
   const months = u(rows.map(x=>monthKey(x.time))).filter(Boolean).sort();
+  const xPad = opt.large ? 18 : (isMain ? 28 : 5);
+  const plotW = Math.max(1, W - xPad * 2);
+  const xAt = i => m.l + xPad + (months.length===1 ? plotW/2 : plotW*i/(months.length-1));
   const brands = u(rows.map(x=>x.brand)).sort();
   const s=brands.map(b=>{
     const map=new Map(months.map(x=>[x,0]));
@@ -1792,13 +1811,13 @@ function renderTrend(rows, target = E.trend, opt = {}){
   const isBar = E.trendMode.value === "bar";
   const trendHitPoints = [];
   s.forEach((serie, si)=>{
-    const pts=serie.pts.map((p,i)=>({x:m.l+(months.length===1?W/2:W*i/(months.length-1)),y:m.t+H-(p.u/yM)*H,...p}));
+    const pts=serie.pts.map((p,i)=>({x:xAt(i),y:m.t+H-(p.u/yM)*H,...p}));
     const c = colorForBrand(serie.b);
     if(isBar){
-      const groupW = months.length > 1 ? (W/(months.length-1)) : W;
+      const groupW = months.length > 1 ? (plotW/(months.length-1)) : plotW;
       const bw = Math.max(5, Math.min(22, groupW / Math.max(s.length + 1, 2)));
       pts.forEach((p, i) => {
-        const baseX = m.l + (months.length===1 ? W/2 : W*i/(months.length-1));
+        const baseX = xAt(i);
         const x = baseX - ((s.length * bw) / 2) + (si * bw);
         const y = m.t + H - (p.u/yM)*H;
         const h = (p.u/yM)*H;
@@ -1827,10 +1846,11 @@ function renderTrend(rows, target = E.trend, opt = {}){
     });
   }
   months.forEach((mm,i)=>{
-    const xPad = 5;
-    const x = m.l + xPad + (months.length===1 ? (W - xPad*2)/2 : (W - xPad*2)*i/(months.length-1));
-    const y=vh-(opt.large ? 72 : 60);
-    target.insertAdjacentHTML("beforeend",`<text x="${x}" y="${y}" text-anchor="start" font-size="${opt.large ? 14 : 12}" fill="#64748b" transform="rotate(30 ${x} ${y})">${escapeHtml(mm)}</text>`);
+    if(!shouldShowMonthLabel(i, months.length)) return;
+    const x = xAt(i);
+    const y=vh-(opt.large ? 76 : (isMain ? 46 : 60));
+    const anchor = i === 0 ? "start" : (i === months.length - 1 ? "end" : "middle");
+    target.insertAdjacentHTML("beforeend",`<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="${opt.large ? 14 : 12}" fill="#64748b">${escapeHtml(mm)}</text>`);
   });
   const legendItems = brands.slice(0,12);
   const legendY = opt.large ? 22 : 18;
