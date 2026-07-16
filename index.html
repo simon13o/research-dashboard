@@ -2340,6 +2340,9 @@
 
 <script>
 const STORAGE_KEY = "amazon_dashboard_state_v2";
+const SUPABASE_URL = "https://lqnpuoipopvufztazeex.supabase.co";
+const SUPABASE_PUBLISHABLE_KEY = "sb_publishable_n0JTOF_1VDli8PJJoajR5g_62EPpWjj";
+const SUPABASE_SALES_TABLE = "sales_data";
 const fallbackPalette = ["#1d4ed8","#f97316","#06b6d4","#f43f5e","#16a34a","#a855f7","#0f766e","#ef4444"];
 const COLOR_OPTIONS = [
   { label:"Blue", value:"#1d4ed8" },
@@ -2668,6 +2671,59 @@ function loadState(){
     marketReportHtml = defaultMarketReportHtml();
     loadedUiState = null;
   }
+}
+
+function supabaseHeaders(){
+  return {
+    apikey: SUPABASE_PUBLISHABLE_KEY,
+    Authorization: `Bearer ${SUPABASE_PUBLISHABLE_KEY}`,
+    Accept: "application/json"
+  };
+}
+function salesSelectionHasMatches(){
+  return data.some(r =>
+    selection.category.has(r.category) &&
+    selection.brand.has(r.brand) &&
+    selection.product.has(r.product)
+  );
+}
+function selectAllCurrentSalesFilters(){
+  selection.category = new Set(u(data.map(x => x.category)).filter(Boolean).sort());
+  const scoped = data.filter(r => selection.category.has(r.category));
+  selection.brand = new Set(u(scoped.map(x => x.brand)).filter(Boolean).sort());
+  const scopedByBrand = scoped.filter(r => selection.brand.has(r.brand));
+  selection.product = new Set(u(scopedByBrand.map(x => x.product)).filter(Boolean).sort());
+}
+async function loadSupabaseSalesData(){
+  if(!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) return false;
+  const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?select=category,brand,product,time,sale_units,price&order=brand.asc,product.asc,time.asc`;
+  const res = await fetch(endpoint, { headers:supabaseHeaders() });
+  if(!res.ok){
+    const message = await res.text().catch(() => "");
+    throw new Error(`Supabase sales_data load failed: ${res.status} ${message}`);
+  }
+  const rows = await res.json();
+  if(!Array.isArray(rows)) return false;
+  data = rows.map(r => norm({
+    category:r.category,
+    brand:r.brand,
+    product:r.product,
+    time:r.time,
+    saleUnits:r.sale_units,
+    price:r.price
+  })).filter(r => r.brand || r.product || r.time);
+  rawSalesRows = legacyMonthlyToRawRows(data);
+  if(!salesSelectionHasMatches()) selectAllCurrentSalesFilters();
+  const ms = months();
+  if(ms.length){
+    if(!ms.includes(E.from.value)) E.from.value = ms[0];
+    if(!ms.includes(E.to.value)) E.to.value = ms[ms.length - 1];
+  }
+  editorSelectedRows.clear();
+  editorTable();
+  renderAll();
+  saveState();
+  return true;
 }
 
 function renderDropdown(targetEl, type, options){
@@ -4886,6 +4942,9 @@ function init(){
   syncDashboardChrome();
   renderAll();
   saveState();
+  loadSupabaseSalesData().catch(err => {
+    console.warn(err);
+  });
 }
 
 init();
