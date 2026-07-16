@@ -2634,7 +2634,11 @@ function applyUiState(ui){
 }
 
 function saveState(){
-  localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, rawSalesRows, brandColors, productIntro, brandProfiles, exhibitions, ui:uiSnapshot() }));
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, rawSalesRows, brandColors, productIntro, brandProfiles, exhibitions, ui:uiSnapshot() }));
+  } catch(err) {
+    console.warn("Dashboard local cache save skipped.", err);
+  }
 }
 function loadState(){
   try {
