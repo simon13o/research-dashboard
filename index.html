@@ -2729,6 +2729,43 @@ async function loadSupabaseSalesData(){
   saveState();
   return true;
 }
+function supabaseSalesPayload(rows){
+  return rows.map(norm).filter(r => r.brand || r.product || r.time).map(r => ({
+    category:r.category || "Other",
+    brand:r.brand || "",
+    product:r.product || "",
+    time:monthKey(r.time),
+    sale_units:Math.max(0, Math.round(Number(r.saleUnits) || 0)),
+    price:Number.isFinite(Number(r.price)) ? Math.max(0, Number(r.price)) : null,
+    source_file:"dashboard_csv_upload",
+    updated_at:new Date().toISOString()
+  })).filter(r => r.time);
+}
+async function upsertSupabaseSalesData(rows){
+  const payload = supabaseSalesPayload(rows);
+  if(!payload.length) return 0;
+  const chunkSize = 500;
+  let count = 0;
+  for(let i = 0; i < payload.length; i += chunkSize){
+    const chunk = payload.slice(i, i + chunkSize);
+    const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?on_conflict=category,brand,product,time`;
+    const res = await fetch(endpoint, {
+      method:"POST",
+      headers:{
+        ...supabaseHeaders(),
+        "Content-Type":"application/json",
+        Prefer:"resolution=merge-duplicates,return=minimal"
+      },
+      body:JSON.stringify(chunk)
+    });
+    if(!res.ok){
+      const message = await res.text().catch(() => "");
+      throw new Error(`Supabase sales_data upsert failed: ${res.status} ${message}`);
+    }
+    count += chunk.length;
+  }
+  return count;
+}
 
 function renderDropdown(targetEl, type, options){
   const selected = selection[type];
@@ -4878,22 +4915,28 @@ function init(){
     const file = E.csv.files && E.csv.files[0];
     if(!file){ alert("Please choose a CSV file first."); return; }
     const rd = new FileReader();
-    rd.onload = () => {
+    rd.onload = async () => {
       try {
         const mapped = csvMap(parseCSV(String(rd.result || "")));
         if(!mapped.length){ alert("CSV has no valid rows."); return; }
-        const baseRaw = rawSalesRows.length ? rawSalesRows : legacyMonthlyToRawRows(data);
-        rawSalesRows = upsertRawSalesRows(baseRaw, mapped);
-        const monthly = rebuildMonthlySalesFromRaw(rawSalesRows);
+        E.csvLoad.disabled = true;
+        E.csvLoad.textContent = "Uploading...";
+        const incomingMonthly = rebuildMonthlySalesFromRaw(mapped.map(normalizeRawSale));
+        const monthly = upsertRows(data, incomingMonthly);
         data = monthly;
-        selection.category = new Set();
-        selection.brand = new Set();
-        selection.product = new Set();
+        rawSalesRows = legacyMonthlyToRawRows(data);
+        selectAllCurrentSalesFilters();
         editorSelectedRows.clear();
-        applyAndSave();
-        alert(`CSV daily upsert completed. ${mapped.length} daily row(s) processed; ${monthly.length} monthly row(s) rebuilt.`);
+        saveState();
+        renderAll();
+        const uploaded = await upsertSupabaseSalesData(incomingMonthly);
+        await loadSupabaseSalesData();
+        alert(`CSV cloud upsert completed. ${mapped.length} CSV row(s) processed; ${uploaded} monthly row(s) saved to Supabase.`);
       } catch(err){
-        alert(`CSV parsing failed: ${err && err.message ? err.message : err}`);
+        alert(`CSV upload failed: ${err && err.message ? err.message : err}`);
+      } finally {
+        E.csvLoad.disabled = false;
+        E.csvLoad.textContent = "Fill Missing Months By CSV";
       }
     };
     rd.readAsText(file, "utf-8");
