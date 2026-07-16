@@ -2766,6 +2766,21 @@ async function upsertSupabaseSalesData(rows){
   }
   return count;
 }
+async function clearSupabaseSalesData(){
+  const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?id=not.is.null`;
+  const res = await fetch(endpoint, {
+    method:"DELETE",
+    headers:{
+      ...supabaseHeaders(),
+      Prefer:"return=minimal"
+    }
+  });
+  if(!res.ok){
+    const message = await res.text().catch(() => "");
+    throw new Error(`Supabase sales_data clear failed: ${res.status} ${message}`);
+  }
+  return true;
+}
 
 function renderDropdown(targetEl, type, options){
   const selected = selection[type];
@@ -4941,17 +4956,27 @@ function init(){
     };
     rd.readAsText(file, "utf-8");
   });
-  E.clearData.addEventListener("click", () => {
-    const ok = confirm("Clear all current data from table and dashboard?");
+  E.clearData.addEventListener("click", async () => {
+    const ok = confirm("Clear all current local and cloud sales data from table and dashboard?");
     if(!ok) return;
-    data = [];
-    rawSalesRows = [];
-    selection.category = new Set();
-    selection.brand = new Set();
-    selection.product = new Set();
-    editorSelectedRows.clear();
-    applyAndSave();
-    alert("All data cleared. You can upload CSV again.");
+    try {
+      E.clearData.disabled = true;
+      E.clearData.textContent = "Clearing...";
+      await clearSupabaseSalesData();
+      data = [];
+      rawSalesRows = [];
+      selection.category = new Set();
+      selection.brand = new Set();
+      selection.product = new Set();
+      editorSelectedRows.clear();
+      applyAndSave();
+      alert("All local and cloud sales data cleared. You can upload CSV again.");
+    } catch(err) {
+      alert(`Cloud clear failed: ${err && err.message ? err.message : err}`);
+    } finally {
+      E.clearData.disabled = false;
+      E.clearData.textContent = "Clear Data";
+    }
   });
   E.exhibitionCsvLoad.addEventListener("click", () => {
     const file = E.exhibitionCsv.files && E.exhibitionCsv.files[0];
