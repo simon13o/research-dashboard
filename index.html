@@ -2376,6 +2376,7 @@ let selectedExhibitionCountry = "";
 let showPastExhibitions = false;
 let showPriceInDual = true;
 let expandedProductCharts = new Set();
+let hiddenTrendBrands = new Set();
 let productInfoEditMode = false;
 let productInfoSearchText = "";
 let productInfoCategoryFilter = "";
@@ -2605,6 +2606,7 @@ function uiSnapshot(){
     prodMode:E.prodMode.value || "bar",
     selectedMode:E.selectedMode.value || "dual",
     showPriceLine:Boolean(E.showPriceLine.checked),
+    hiddenTrendBrands:[...hiddenTrendBrands],
     sidebarWidth:getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w").trim() || "260px",
     productColorMode:"shades",
     activeTab:activeTabId(),
@@ -2626,6 +2628,7 @@ function applyUiState(ui){
   if(ui.selectedMode) E.selectedMode.value = ui.selectedMode;
   E.showPriceLine.checked = ui.showPriceLine !== false;
   showPriceInDual = E.showPriceLine.checked;
+  hiddenTrendBrands = new Set(Array.isArray(ui.hiddenTrendBrands) ? ui.hiddenTrendBrands : []);
   if(ui.sidebarWidth) document.documentElement.style.setProperty("--sidebar-w", ui.sidebarWidth);
   E.productColorMode.value = "shades";
   marketReportHtml = typeof ui.reportHtml === "string" && ui.reportHtml.trim() ? ui.reportHtml : (typeof ui.overviewHtml === "string" && ui.overviewHtml.trim() ? ui.overviewHtml : defaultMarketReportHtml());
@@ -3263,7 +3266,11 @@ function renderTrend(rows, target = E.trend, opt = {}){
   const plotW = Math.max(1, W - xPad * 2);
   const xAt = i => m.l + xPad + (months.length===1 ? plotW/2 : plotW*i/(months.length-1));
   const brands = u(rows.map(x=>x.brand)).sort();
-  const s=brands.map(b=>{
+  hiddenTrendBrands = new Set([...hiddenTrendBrands].filter(b => brands.includes(b)));
+  const visibleBrands = brands.filter(b => !hiddenTrendBrands.has(b));
+  const activeBrands = visibleBrands.length ? visibleBrands : brands;
+  if(!visibleBrands.length && brands.length && hiddenTrendBrands.size) hiddenTrendBrands.clear();
+  const s=activeBrands.map(b=>{
     const map=new Map(months.map(x=>[x,0]));
     rows.filter(r=>r.brand===b).forEach(r=>{
       const mk = monthKey(r.time);
@@ -3324,8 +3331,15 @@ function renderTrend(rows, target = E.trend, opt = {}){
   legendItems.forEach((b, idx) => {
     const c = colorForBrand(b);
     const short = truncateLabel(b, opt.large ? 16 : 12);
+    const hidden = hiddenTrendBrands.has(b);
     const x = legendStart + idx * legendGap;
-    target.insertAdjacentHTML("beforeend", `<rect x="${x}" y="${legendY-9}" width="10" height="10" rx="2" fill="${c}" data-tip="${escapeAttr(b)}"/><text x="${x+15}" y="${legendY}" font-size="${opt.large ? 13 : 11}" fill="#334155" data-tip="${escapeAttr(b)}">${escapeHtml(short)}</text>`);
+    const hitW = Math.min(legendGap - 8, 18 + short.length * (opt.large ? 8 : 7));
+    target.insertAdjacentHTML("beforeend", `
+      <g data-trend-brand="${escapeAttr(b)}" style="cursor:pointer">
+        <rect x="${x}" y="${legendY-9}" width="10" height="10" rx="2" fill="${c}" opacity="${hidden ? 0.28 : 1}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}"/>
+        <text x="${x+15}" y="${legendY}" font-size="${opt.large ? 13 : 11}" fill="${hidden ? "#94a3b8" : "#334155"}" text-decoration="${hidden ? "line-through" : "none"}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}">${escapeHtml(short)}</text>
+        <rect x="${x-6}" y="${legendY-18}" width="${hitW}" height="26" rx="8" fill="transparent" pointer-events="all" data-trend-brand="${escapeAttr(b)}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}"/>
+      </g>`);
   });
 }
 
@@ -4699,6 +4713,16 @@ function init(){
   }));
   E.trendZoomBtn.addEventListener("click", () => openZoom("trend"));
   E.prodZoomBtn.addEventListener("click", () => openZoom("prod"));
+  E.trend.addEventListener("click", e => {
+    const item = e.target instanceof Element ? e.target.closest("[data-trend-brand]") : null;
+    if(!item) return;
+    const brand = item.getAttribute("data-trend-brand") || "";
+    if(!brand) return;
+    if(hiddenTrendBrands.has(brand)) hiddenTrendBrands.delete(brand);
+    else hiddenTrendBrands.add(brand);
+    renderAll();
+    saveState();
+  });
   E.zoomCloseBtn.addEventListener("click", closeZoom);
   E.zoomModal.addEventListener("click", e => { if(e.target === E.zoomModal) closeZoom(); });
   E.marketReportEntry.addEventListener("click", openMarketReport);
