@@ -1577,7 +1577,11 @@
     .exhibition-bars { display:grid; gap:12px; }
     .ex-bar-row { display:grid; grid-template-columns:minmax(90px,150px) 1fr auto; gap:10px; align-items:center; font-size:12px; color:#475569; }
     .ex-bar-track { height:10px; border-radius:999px; background:#f1f5f9; overflow:hidden; }
-    .ex-bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,#c4b5fd,#7c3aed); }
+    .ex-bar-fill { height:100%; border-radius:999px; background:linear-gradient(90deg,#c4b5fd,#7c3aed); transform-origin:left center; animation:barFillReveal .72s cubic-bezier(.16,1,.3,1) both; }
+    @keyframes barFillReveal { from { transform:scaleX(0); opacity:.45; } to { transform:scaleX(1); opacity:1; } }
+    @media (prefers-reduced-motion:reduce){
+      .ex-bar-fill { animation:none; }
+    }
     .exhibition-table-wrap { overflow:auto; }
     .exhibition-table-wrap table { min-width:980px; }
     .exhibition-actions { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
@@ -3245,6 +3249,48 @@ function shouldShowMonthLabel(i, total){
   if(total <= 24) return i % 3 === 0;
   return i % 6 === 0;
 }
+const barGrowEase = ".16 1 .3 1";
+let barGrowId = 0;
+let barGrowFrame = 0;
+function barGrowTiming(delay = 0){
+  return `data-bar-animate="true" dur=".72s" begin="${Math.max(0, delay)}ms" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="${barGrowEase}"`;
+}
+function restartBarAnimations(root = document){
+  cancelAnimationFrame(barGrowFrame);
+  barGrowFrame = requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      root.querySelectorAll("animate[data-bar-animate]").forEach(anim => {
+        if(typeof anim.beginElement === "function"){
+          try { anim.beginElement(); } catch(err) {}
+        }
+      });
+      root.querySelectorAll(".ex-bar-fill").forEach(el => {
+        el.style.animation = "none";
+        void el.offsetWidth;
+        el.style.animation = "";
+      });
+    });
+  });
+}
+function svgHorizontalBar(x,y,w,h,rx,fill,attrs = "",delay = 0){
+  return `<rect x="${x}" y="${y}" width="0" height="${h}" rx="${rx}" fill="${fill}" ${attrs}>` +
+    `<animate attributeName="width" from="0" to="${w}" ${barGrowTiming(delay)}/>` +
+    `</rect>`;
+}
+function svgVerticalBar(x,y,w,h,rx,fill,attrs = "",delay = 0){
+  const base = y + h;
+  return `<rect x="${x}" y="${base}" width="${w}" height="0" rx="${rx}" fill="${fill}" ${attrs}>` +
+    `<animate attributeName="y" from="${base}" to="${y}" ${barGrowTiming(delay)}/>` +
+    `<animate attributeName="height" from="0" to="${h}" ${barGrowTiming(delay)}/>` +
+    `</rect>`;
+}
+function svgClippedVerticalPath(pathD,x,y,w,h,base,fill,attrs = "",delay = 0){
+  const id = `barGrowClip_${barGrowId++}`;
+  return `<defs><clipPath id="${id}"><rect x="${x}" y="${base}" width="${w}" height="0">` +
+    `<animate attributeName="y" from="${base}" to="${y}" ${barGrowTiming(delay)}/>` +
+    `<animate attributeName="height" from="0" to="${h}" ${barGrowTiming(delay)}/>` +
+    `</rect></clipPath></defs><path d="${pathD}" fill="${fill}" clip-path="url(#${id})" ${attrs}/>`;
+}
 
 function renderTrend(rows, target = E.trend, opt = {}){
   target.innerHTML = "";
@@ -3293,7 +3339,7 @@ function renderTrend(rows, target = E.trend, opt = {}){
         const x = baseX - ((s.length * bw) / 2) + (si * bw);
         const y = m.t + H - (p.u/yM)*H;
         const h = (p.u/yM)*H;
-        target.insertAdjacentHTML("beforeend", `<rect x="${x}" y="${y}" width="${bw-1}" height="${h}" rx="2" fill="${c}" data-tip="${escapeAttr(`${serie.b} | ${p.m}: ${fN(p.u)} units`)}"/>`);
+        target.insertAdjacentHTML("beforeend", svgVerticalBar(x, y, bw-1, h, 2, c, `data-tip="${escapeAttr(`${serie.b} | ${p.m}: ${fN(p.u)} units`)}"`, (i * 36) + (si * 18)));
       });
     } else {
       const total = serie.pts.reduce((s0,p)=>s0+p.u,0);
@@ -3441,7 +3487,7 @@ function renderTopProducts(rows, target = E.prod, opt = {}){
       const labelText = truncateLabel(lab, opt.large ? 34 : 22);
       const tip = `${item.label} | ${metricLabel}: ${formatMetric(item.value)} | Units: ${fN(item.units)}`;
       const tipHtml = rankingTipHtml(item, `${metricLabel}: ${formatMetric(item.value)} | Units: ${fN(item.units)}`);
-      target.insertAdjacentHTML("beforeend", `<text x="${mg.l-8}" y="${y+bh*.72}" font-size="${opt.large?18:15}" text-anchor="end" fill="#334155" data-tip-html="${escapeAttr(tipHtml)}">${escapeHtml(labelText)}</text><rect x="${mg.l}" y="${y}" width="${w}" height="${bh}" rx="6" fill="${c}" data-tip="${escapeAttr(tip)}" data-tip-html="${escapeAttr(tipHtml)}"/>`);
+      target.insertAdjacentHTML("beforeend", `<text x="${mg.l-8}" y="${y+bh*.72}" font-size="${opt.large?18:15}" text-anchor="end" fill="#334155" data-tip-html="${escapeAttr(tipHtml)}">${escapeHtml(labelText)}</text>${svgHorizontalBar(mg.l, y, w, bh, 6, c, `data-tip="${escapeAttr(tip)}" data-tip-html="${escapeAttr(tipHtml)}"`, i * 55)}`);
     });
   }
 }
@@ -3668,7 +3714,8 @@ function drawMiniChart(svg, points, color, mode){
       const y = Math.max(m.t, uScale(p.u));
       const h = Math.max(0, m.t + H - y);
       const tip = `${p.m}: Units ${fN(p.u)} | Avg Price $${p.p.toFixed(2)}`;
-      svg.insertAdjacentHTML("beforeend", `<path d="M ${x} ${m.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${m.t+H} Z" fill="url(#${gradId})" data-tip="${escapeAttr(tip)}"/>`);
+      const dBar = `M ${x} ${m.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${m.t+H} Z`;
+      svg.insertAdjacentHTML("beforeend", svgClippedVerticalPath(dBar, x, y, bw, h, m.t+H, `url(#${gradId})`, `data-tip="${escapeAttr(tip)}"`, i * 55));
     });
 
     if(showPriceInDual){
@@ -3701,7 +3748,8 @@ function drawMiniChart(svg, points, color, mode){
       const h = (p.u/yM)*H;
       const y = m.t + H - h;
       const tip = `${p.m}: ${fN(p.u)} units`;
-      svg.insertAdjacentHTML("beforeend", `<path d="M ${x} ${m.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${m.t+H} Z" fill="url(#${gradId})" data-tip="${escapeAttr(tip)}"/>`);
+      const dBar = `M ${x} ${m.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${m.t+H} Z`;
+      svg.insertAdjacentHTML("beforeend", svgClippedVerticalPath(dBar, x, y, bw, h, m.t+H, `url(#${gradId})`, `data-tip="${escapeAttr(tip)}"`, i * 55));
     });
     svg.insertAdjacentHTML("beforeend", `<g><circle cx="${m.l+W-56}" cy="${m.t-11}" r="4" fill="url(#${gradId})"/><text x="${m.l+W-47}" y="${m.t-8}" font-size="10" fill="#64748b">Units</text></g>`);
     drawXLabels(points);
@@ -3798,6 +3846,7 @@ function renderAll(){
   renderSelectedProductCharts(rows);
   refreshIntroSelectors();
   renderExhibitionView();
+  restartBarAnimations();
 }
 
 function applyAndSave(){
@@ -3817,6 +3866,7 @@ function openZoom(kind){
     E.zoomTitle.textContent = "Performance Ranking (Zoom)";
     renderTopProducts(rows, E.zoomSvg, { large:true });
   }
+  restartBarAnimations(E.zoomSvg);
 }
 function closeZoom(){
   E.zoomModal.classList.remove("open");
