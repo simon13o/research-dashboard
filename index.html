@@ -96,6 +96,7 @@
     .dashboard-section-title p { margin:3px 0 0; color:#94a3b8; font-size:12px; font-weight:600; }
     .head { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; gap:8px; }
     .ctrl { display:flex; align-items:center; gap:8px; color:var(--muted); }
+    .selected-internal-controls { display:none !important; }
     .ctrl select { width:auto; }
     .icon-btn { width:auto; padding:6px 8px; border:1px solid var(--bd); border-radius:9px; background:#fff; color:#475569; cursor:pointer; transition:.18s ease; }
     .icon-btn:hover { box-shadow:0 8px 16px rgba(15,23,42,.12); color:#1d4ed8; }
@@ -156,6 +157,24 @@
 
     .prod-cards { display:grid; gap:10px; grid-template-columns:repeat(2,minmax(0,1fr)); align-items:start; }
     .prod-card { border:1px solid var(--bd); border-radius:12px; padding:12px; background:#fff; box-shadow:0 10px 20px rgba(17,24,39,.05); }
+    .prod-card.prod-card-animate {
+      opacity:0;
+      transform:translateY(18px) scale(.985);
+      transition:opacity .7s cubic-bezier(.16,1,.3,1), transform .7s cubic-bezier(.16,1,.3,1);
+      transition-delay:var(--card-delay,0ms);
+      will-change:opacity, transform;
+    }
+    .prod-card.prod-card-animate.is-visible {
+      opacity:1;
+      transform:translateY(0) scale(1);
+    }
+    @media (prefers-reduced-motion:reduce){
+      .prod-card.prod-card-animate {
+        opacity:1;
+        transform:none;
+        transition:none;
+      }
+    }
     .prod-card h4 { margin:0; font-size:13px; }
     .prod-card-head { display:flex; align-items:flex-start; justify-content:space-between; gap:10px; margin-bottom:10px; }
     .prod-card-title { min-width:0; }
@@ -2046,7 +2065,13 @@
       </div>
     </div>
     <article class="card">
-      <div class="head"><b>Selected Product Monthly Sales</b><div class="ctrl">Chart <select id="selectedMode"><option value="dual" selected>Dual Axis</option><option value="line">Line</option><option value="bar">Bar</option></select><label style="display:flex;align-items:center;gap:6px"><input id="showPriceLine" type="checkbox" checked style="width:auto">Price</label></div></div>
+      <div class="head">
+        <b>Selected Product Monthly Sales</b>
+        <div class="selected-internal-controls">
+          <select id="selectedMode"><option value="dual" selected>Dual Axis</option><option value="line">Line</option><option value="bar">Bar</option></select>
+          <input id="showPriceLine" type="checkbox" checked>
+        </div>
+      </div>
       <div id="selectedProductsCharts" class="prod-cards"></div>
       <p id="selectedEmpty" class="empty" hidden>No selected product data to render.</p>
     </article>
@@ -2608,8 +2633,8 @@ function uiSnapshot(){
     prodCompareBy:E.prodCompareBy.value || "product",
     prodRankMetric:E.prodRankMetric.value || "units",
     prodMode:E.prodMode.value || "bar",
-    selectedMode:E.selectedMode.value || "dual",
-    showPriceLine:Boolean(E.showPriceLine.checked),
+    selectedMode:"dual",
+    showPriceLine:true,
     hiddenTrendBrands:[...hiddenTrendBrands],
     sidebarWidth:getComputedStyle(document.documentElement).getPropertyValue("--sidebar-w").trim() || "260px",
     productColorMode:"shades",
@@ -2629,9 +2654,9 @@ function applyUiState(ui){
   if(ui.prodCompareBy) E.prodCompareBy.value = ui.prodCompareBy;
   if(ui.prodRankMetric) E.prodRankMetric.value = ui.prodRankMetric;
   if(ui.prodMode) E.prodMode.value = ui.prodMode;
-  if(ui.selectedMode) E.selectedMode.value = ui.selectedMode;
-  E.showPriceLine.checked = ui.showPriceLine !== false;
-  showPriceInDual = E.showPriceLine.checked;
+  E.selectedMode.value = "dual";
+  E.showPriceLine.checked = true;
+  showPriceInDual = true;
   hiddenTrendBrands = new Set(Array.isArray(ui.hiddenTrendBrands) ? ui.hiddenTrendBrands : []);
   if(ui.sidebarWidth) document.documentElement.style.setProperty("--sidebar-w", ui.sidebarWidth);
   E.productColorMode.value = "shades";
@@ -3254,6 +3279,7 @@ let barGrowId = 0;
 let barGrowFrame = 0;
 let lineGrowId = 0;
 let lineGrowFrame = 0;
+let selectedCardObserver = null;
 function barGrowTiming(delay = 0){
   return `data-bar-animate="true" dur="1.2s" begin="${Math.max(0, delay)}ms" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="${barGrowEase}"`;
 }
@@ -3318,6 +3344,32 @@ function svgClippedVerticalPath(pathD,x,y,w,h,base,fill,attrs = "",delay = 0){
     `<animate attributeName="y" from="${base}" to="${y}" ${barGrowTiming(delay)}/>` +
     `<animate attributeName="height" from="0" to="${h}" ${barGrowTiming(delay)}/>` +
     `</rect></clipPath></defs><path d="${pathD}" fill="${fill}" clip-path="url(#${id})" ${attrs}/>`;
+}
+
+function observeSelectedProductCards(){
+  if(selectedCardObserver){
+    selectedCardObserver.disconnect();
+    selectedCardObserver = null;
+  }
+  const cards = [...E.selectedProductsCharts.querySelectorAll(".prod-card-animate")];
+  cards.forEach((card, idx) => {
+    card.classList.remove("is-visible");
+    card.style.setProperty("--card-delay", `${Math.min(idx, 12) * 50}ms`);
+  });
+  if(!cards.length) return;
+  if(!("IntersectionObserver" in window)){
+    cards.forEach(card => card.classList.add("is-visible"));
+    return;
+  }
+  selectedCardObserver = new IntersectionObserver(entries => {
+    entries.forEach(entry => {
+      if(entry.isIntersecting){
+        entry.target.classList.add("is-visible");
+        selectedCardObserver.unobserve(entry.target);
+      }
+    });
+  }, { threshold:.14, rootMargin:"0px 0px -8% 0px" });
+  cards.forEach(card => selectedCardObserver.observe(card));
 }
 
 function renderTrend(rows, target = E.trend, opt = {}){
@@ -3613,7 +3665,7 @@ function renderSelectedProductPreview(rows){
   E.selectedPreview.innerHTML = `
     <div class="selected-preview-summary">
       <div><small>Selected Products</small><b>${entries.length}</b></div>
-      <span class="selected-preview-mode">${escapeHtml(E.selectedMode.value === "dual" ? "Dual Axis" : E.selectedMode.value)} view</span>
+      <span class="selected-preview-mode">Top 3 summary</span>
     </div>
     <div class="selected-preview-list">
       ${entries.slice(0,3).map(item => {
@@ -3630,7 +3682,8 @@ function renderSelectedProductPreview(rows){
   `;
 }
 
-function renderSelectedProductCharts(rows){
+function renderSelectedProductCharts(rows, options = {}){
+  const animateCards = options.animateCards !== false;
   E.selectedProductsCharts.innerHTML = "";
   const pad2 = n => String(n).padStart(2, "0");
   const shiftMonth = (ym, delta) => {
@@ -3688,7 +3741,7 @@ function renderSelectedProductCharts(rows){
     const trend = trendForPoints(points);
     const expanded = expandedProductCharts.has(k);
     const card = document.createElement("div");
-    card.className = "prod-card";
+    card.className = `prod-card${animateCards ? " prod-card-animate" : ""}`;
     const svgId = `mini_${Math.random().toString(36).slice(2)}`;
     card.innerHTML = `
       <div class="prod-card-head">
@@ -3709,9 +3762,15 @@ function renderSelectedProductCharts(rows){
     E.selectedProductsCharts.appendChild(card);
     if(expanded){
       const svg = document.getElementById(svgId);
-      drawMiniChart(svg, points, color, E.selectedMode.value);
+      drawMiniChart(svg, points, color, "dual");
     }
   });
+  if(animateCards){
+    observeSelectedProductCards();
+  } else if(selectedCardObserver){
+    selectedCardObserver.disconnect();
+    selectedCardObserver = null;
+  }
 }
 
 function drawMiniChart(svg, points, color, mode){
@@ -4983,19 +5042,14 @@ function init(){
   });
   document.addEventListener("mouseleave", () => { E.tip.style.display = "none"; E.tip.innerHTML = ""; lastTipKey = ""; });
 
-  [E.from, E.to, E.trendMode, E.prodCompareBy, E.prodRankMetric, E.prodMode, E.selectedMode].forEach(el => el.addEventListener("change", () => { renderAll(); saveState(); }));
+  [E.from, E.to, E.trendMode, E.prodCompareBy, E.prodRankMetric, E.prodMode].forEach(el => el.addEventListener("change", () => { renderAll(); saveState(); }));
   E.selectedProductsCharts.addEventListener("click", e => {
     const btn = e.target instanceof Element ? e.target.closest("[data-product-toggle]") : null;
     if(!btn) return;
     const key = btn.getAttribute("data-product-toggle") || "";
     if(expandedProductCharts.has(key)) expandedProductCharts.delete(key);
     else expandedProductCharts.add(key);
-    renderSelectedProductCharts(filteredRows());
-  });
-  E.showPriceLine.addEventListener("change", () => {
-    showPriceInDual = E.showPriceLine.checked;
-    renderAll();
-    saveState();
+    renderSelectedProductCharts(filteredRows(), { animateCards:false });
   });
   E.editorSearch.addEventListener("input", () => {
     editorSearchText = E.editorSearch.value || "";
