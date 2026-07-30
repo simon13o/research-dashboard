@@ -3165,6 +3165,25 @@ function mN(v){
   const t = monthKey(v);
   return t ? Number(t.replace("-","")) : NaN;
 }
+function shiftMonth(ym, delta){
+  const [y,m] = String(ym || "").split("-").map(Number);
+  const d = new Date(y || new Date().getFullYear(), (m || 1) - 1 + delta, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,"0")}`;
+}
+function monthEndGraceComparisonMonths(rows, graceDays = 2){
+  const rowMonths = u((rows || []).map(r => monthKey(r.time)).filter(Boolean)).sort();
+  const now = new Date();
+  const currentCalendarMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,"0")}`;
+  const daysInCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const daysUntilMonthEnd = daysInCurrentMonth - now.getDate();
+  const canUseCurrentMonth = rowMonths.includes(currentCalendarMonth) && daysUntilMonthEnd <= graceDays;
+  const currentMonth = canUseCurrentMonth ? currentCalendarMonth : shiftMonth(currentCalendarMonth, -1);
+  return {
+    currentMonth,
+    previousMonth:shiftMonth(currentMonth, -1),
+    usesCurrentPartialMonth:canUseCurrentMonth
+  };
+}
 function norm(r){
   return {
     category:String(r.category || "Other").trim() || "Other",
@@ -4370,26 +4389,20 @@ function renderColorOptions(rows){
 
 function renderSelectedProductPreview(rows){
   if(!E.selectedPreview) return;
-  const pad2 = n => String(n).padStart(2, "0");
-  const shiftMonth = (ym, delta) => {
-    const [y,m] = String(ym).split("-").map(Number);
-    const d = new Date(y, (m || 1) - 1 + delta, 1);
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-  };
   const monthShort = ym => {
     const [y,m] = String(ym).split("-").map(Number);
     if(!y || !m) return ym;
     return new Date(y, m - 1, 1).toLocaleString("en-US", { month:"short" });
   };
-  const now = new Date();
-  const latestCompleteMonth = shiftMonth(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}`, -1);
-  const previousCompleteMonth = shiftMonth(latestCompleteMonth, -1);
+  const comparison = monthEndGraceComparisonMonths(rows);
+  const latestComparisonMonth = comparison.currentMonth;
+  const previousComparisonMonth = comparison.previousMonth;
   const trendFor = item => {
-    const current = item.months.get(latestCompleteMonth) || 0;
-    const previous = item.months.get(previousCompleteMonth) || 0;
-    const label = `${monthShort(latestCompleteMonth)} vs ${monthShort(previousCompleteMonth)}`;
+    const current = item.months.get(latestComparisonMonth) || 0;
+    const previous = item.months.get(previousComparisonMonth) || 0;
+    const label = `${monthShort(latestComparisonMonth)} vs ${monthShort(previousComparisonMonth)}`;
     if(previous === 0 && current > 0) return { text:"New growth", cls:"up", tip:`${label}: ${fN(current)} vs ${fN(previous)} units` };
-    if(previous === 0 && current === 0) return { text:"No trend", cls:"", tip:`${label}: no units in either complete month` };
+    if(previous === 0 && current === 0) return { text:"No trend", cls:"", tip:`${label}: no units in either comparison month` };
     const pct = ((current - previous) / previous) * 100;
     const cls = pct > 0 ? "up" : (pct < 0 ? "down" : "");
     const sign = pct > 0 ? "+" : "";
@@ -4451,18 +4464,12 @@ function renderSelectedProductPreview(rows){
 function renderSelectedProductCharts(rows, options = {}){
   const animateCards = options.animateCards !== false;
   E.selectedProductsCharts.innerHTML = "";
-  const pad2 = n => String(n).padStart(2, "0");
-  const shiftMonth = (ym, delta) => {
-    const [y,m] = String(ym).split("-").map(Number);
-    const d = new Date(y, (m || 1) - 1 + delta, 1);
-    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}`;
-  };
-  const now = new Date();
-  const latestCompleteMonth = shiftMonth(`${now.getFullYear()}-${pad2(now.getMonth() + 1)}`, -1);
-  const previousCompleteMonth = shiftMonth(latestCompleteMonth, -1);
+  const comparison = monthEndGraceComparisonMonths(rows);
+  const latestComparisonMonth = comparison.currentMonth;
+  const previousComparisonMonth = comparison.previousMonth;
   const trendForPoints = points => {
-    const latest = points.find(p => p.m === latestCompleteMonth)?.u || 0;
-    const prev = points.find(p => p.m === previousCompleteMonth)?.u || 0;
+    const latest = points.find(p => p.m === latestComparisonMonth)?.u || 0;
+    const prev = points.find(p => p.m === previousComparisonMonth)?.u || 0;
     if(prev === 0 && latest > 0) return { text:"New", cls:"up" };
     if(prev === 0 && latest === 0) return { text:"No trend", cls:"" };
     const pct = ((latest - prev) / prev) * 100;
@@ -4520,7 +4527,7 @@ function renderSelectedProductCharts(rows, options = {}){
       <div class="prod-summary-grid">
         <div class="prod-summary-metric"><small>Total Units</small><b>${fN(totalUnits)}</b></div>
         <div class="prod-summary-metric"><small>Avg Price</small><b>$${avgPrice.toFixed(2)}</b></div>
-        <div class="prod-summary-metric"><small>${escapeHtml(latestCompleteMonth)} vs ${escapeHtml(previousCompleteMonth)}</small><b class="${trend.cls}">${escapeHtml(trend.text)}</b></div>
+        <div class="prod-summary-metric"><small>${escapeHtml(latestComparisonMonth)} vs ${escapeHtml(previousComparisonMonth)}</small><b class="${trend.cls}">${escapeHtml(trend.text)}</b></div>
       </div>
       <div class="prod-spark-row"><span>Monthly units trend</span>${sparkline(points, color)}</div>
       ${expanded ? `<div class="prod-chart-wrap"><svg id="${svgId}" class="mini-svg" viewBox="0 0 620 220"></svg></div>` : ""}
