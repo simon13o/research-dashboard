@@ -4401,7 +4401,7 @@ function renderSelectedProductPreview(rows){
     const current = item.months.get(latestComparisonMonth) || 0;
     const previous = item.months.get(previousComparisonMonth) || 0;
     const label = `${monthShort(latestComparisonMonth)} vs ${monthShort(previousComparisonMonth)}`;
-    if(previous === 0 && current > 0) return { text:"New growth", cls:"up", tip:`${label}: ${fN(current)} vs ${fN(previous)} units` };
+    if(previous === 0 && current > 0) return { text:"New", cls:"up", tip:`${label}: ${fN(current)} vs ${fN(previous)} units` };
     if(previous === 0 && current === 0) return { text:"No trend", cls:"", tip:`${label}: no units in either comparison month` };
     const pct = ((current - previous) / previous) * 100;
     const cls = pct > 0 ? "up" : (pct < 0 ? "down" : "");
