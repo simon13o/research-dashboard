@@ -191,8 +191,9 @@
     .prod-summary-metric b.up { color:#16a34a; }
     .prod-summary-metric b.down { color:#ef4444; }
     .prod-spark-row { display:flex; align-items:center; justify-content:space-between; gap:10px; color:#94a3b8; font-size:11px; font-weight:750; }
-    .prod-chart-wrap { margin-top:10px; overflow:auto; }
-    .mini-svg { min-width:320px; height:220px; border:1px solid var(--bd); border-radius:10px; background:#fff; }
+    .prod-chart-wrap { width:100%; margin-top:10px; overflow-x:auto; overflow-y:hidden; }
+    .mini-svg { display:block; width:100%; min-width:0; height:220px; border:1px solid var(--bd); border-radius:10px; background:#fff; }
+    @media(max-width:620px){ .mini-svg { min-width:560px; } }
     .selected-preview { display:grid; gap:10px; align-content:start; }
     .selected-preview-list { display:grid; gap:10px; }
     .selected-preview-row { display:grid; grid-template-columns:72px minmax(0,1fr) minmax(92px,108px); gap:12px; align-items:center; padding:10px 12px 10px 10px; border-radius:18px; background:linear-gradient(180deg,#ffffff,#fbfcff); box-shadow:inset 0 0 0 1px #eef2f7, 0 10px 24px rgba(31,41,55,.04); transition:transform .22s ease, box-shadow .22s ease; }
@@ -4625,7 +4626,8 @@ function renderSelectedProductCharts(rows, options = {}){
 
 function drawMiniChart(svg, points, color, mode){
   if(!points.length) return;
-  const m={t:26,r:58,b:34,l:48}, W=620-m.l-m.r, H=220-m.t-m.b;
+  const svgWidth=620;
+  const m={t:26,r:58,b:34,l:48}, W=svgWidth-m.l-m.r, H=220-m.t-m.b;
   const lineInk = "#334155";
   const gradId = `g_${Math.random().toString(36).slice(2,8)}`;
   const grad = `<defs><linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${color}" stop-opacity="0.92"/><stop offset="100%" stop-color="${color}" stop-opacity="0.45"/></linearGradient></defs>`;
@@ -4637,39 +4639,48 @@ function drawMiniChart(svg, points, color, mode){
   const drawXLabels = (arr) => arr.forEach((p,i)=>svg.insertAdjacentHTML("beforeend", `<text x="${xAt(i)}" y="214" text-anchor="middle" font-size="10" fill="#64748b">${escapeHtml(p.m)}</text>`));
 
   if(mode === "dual"){
+    // Keep the price scale in its own right-side gutter so labels cannot cover the final bar.
+    const dualM={...m,r:96};
+    const dualW=svgWidth-dualM.l-dualM.r;
+    const dualXStart=dualM.l+8;
+    const dualXEnd=dualM.l+dualW-8;
+    const dualSlot=points.length ? (dualXEnd-dualXStart)/points.length : (dualXEnd-dualXStart);
+    const dualXAt=i=>(points.length===1 ? (dualXStart+dualXEnd)/2 : dualXStart+dualSlot*(i+.5));
+    const drawDualXLabels=arr=>arr.forEach((p,i)=>svg.insertAdjacentHTML("beforeend", `<text x="${dualXAt(i)}" y="214" text-anchor="middle" font-size="10" fill="#64748b">${escapeHtml(p.m)}</text>`));
+    const priceLabelX=svgWidth-8;
     const uMax = Math.max(...points.map(p=>p.u),1);
     const pMax = Math.max(...points.map(p=>p.p),1);
     const uAxisMax = niceAxisMax(uMax);
-    const uScale = v => m.t + H - (v / uAxisMax) * H;
-    const pScale = v => m.t + H - (v / pMax) * H;
-    yAxis(svg,m,W,H,uAxisMax);
+    const uScale = v => dualM.t + H - (v / uAxisMax) * H;
+    const pScale = v => dualM.t + H - (v / pMax) * H;
+    yAxis(svg,dualM,dualW,H,uAxisMax);
 
-    const bw = Math.max(8, Math.min(28, slot * 0.42));
+    const bw = Math.max(8, Math.min(28, dualSlot * 0.42));
     points.forEach((p,i)=>{
-      const cx = xAt(i);
+      const cx = dualXAt(i);
       const x = cx - bw/2;
-      const y = Math.max(m.t, uScale(p.u));
-      const h = Math.max(0, m.t + H - y);
+      const y = Math.max(dualM.t, uScale(p.u));
+      const h = Math.max(0, dualM.t + H - y);
       const tip = `${p.m}: Units ${fN(p.u)} | Avg Price $${p.p.toFixed(2)}`;
-      const dBar = `M ${x} ${m.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${m.t+H} Z`;
-      svg.insertAdjacentHTML("beforeend", svgClippedVerticalPath(dBar, x, y, bw, h, m.t+H, `url(#${gradId})`, `data-tip="${escapeAttr(tip)}"`, i * 55));
+      const dBar = `M ${x} ${dualM.t+H} L ${x} ${y+5} Q ${x} ${y} ${x+5} ${y} L ${x+bw-5} ${y} Q ${x+bw} ${y} ${x+bw} ${y+5} L ${x+bw} ${dualM.t+H} Z`;
+      svg.insertAdjacentHTML("beforeend", svgClippedVerticalPath(dBar, x, y, bw, h, dualM.t+H, `url(#${gradId})`, `data-tip="${escapeAttr(tip)}"`, i * 55));
     });
 
     if(showPriceInDual){
-      const linePts = points.map((p,i)=>({x:xAt(i),y:Math.min(m.t+H,Math.max(m.t,pScale(p.p))),m:p.m,p:p.p}));
+      const linePts = points.map((p,i)=>({x:dualXAt(i),y:Math.min(dualM.t+H,Math.max(dualM.t,pScale(p.p))),m:p.m,p:p.p}));
       const d2 = linePts.map((p,i)=>`${i?"L":"M"}${p.x},${p.y}`).join(" ");
       svg.insertAdjacentHTML("beforeend", svgAnimatedLinePath(d2, `fill="none" stroke="${lineInk}" stroke-width="2"`, 120));
       linePts.forEach(p=>svg.insertAdjacentHTML("beforeend", `<circle cx="${p.x}" cy="${p.y}" r="3.2" fill="#fff" stroke="${lineInk}" stroke-width="1.5" data-tip="${escapeAttr(`${p.m}: Avg Price $${p.p.toFixed(2)}`)}"/>`));
       for(let i=0;i<=4;i++){
-        const y = m.t + H - (H*i/4);
+        const y = dualM.t + H - (H*i/4);
         const pv = (pMax*i/4).toFixed(2);
-        svg.insertAdjacentHTML("beforeend", `<text x="${m.l+W-2}" y="${y+4}" text-anchor="end" font-size="10" fill="#8a96a3">$${pv}</text>`);
+        svg.insertAdjacentHTML("beforeend", `<text x="${priceLabelX}" y="${y+4}" text-anchor="end" font-size="10" fill="#8a96a3">$${pv}</text>`);
       }
-      svg.insertAdjacentHTML("beforeend", `<g><circle cx="${m.l+W-112}" cy="${m.t-11}" r="4" fill="url(#${gradId})"/><text x="${m.l+W-103}" y="${m.t-8}" font-size="10" fill="#64748b">Units</text><circle cx="${m.l+W-54}" cy="${m.t-11}" r="3.2" fill="#fff" stroke="${lineInk}" stroke-width="1.4"/><text x="${m.l+W-45}" y="${m.t-8}" font-size="10" fill="#64748b">Price</text></g>`);
+      svg.insertAdjacentHTML("beforeend", `<g><circle cx="${dualM.l+dualW-112}" cy="${dualM.t-11}" r="4" fill="url(#${gradId})"/><text x="${dualM.l+dualW-103}" y="${dualM.t-8}" font-size="10" fill="#64748b">Units</text><circle cx="${dualM.l+dualW-54}" cy="${dualM.t-11}" r="3.2" fill="#fff" stroke="${lineInk}" stroke-width="1.4"/><text x="${dualM.l+dualW-45}" y="${dualM.t-8}" font-size="10" fill="#64748b">Price</text></g>`);
     } else {
-      svg.insertAdjacentHTML("beforeend", `<g><circle cx="${m.l+W-56}" cy="${m.t-11}" r="4" fill="url(#${gradId})"/><text x="${m.l+W-47}" y="${m.t-8}" font-size="10" fill="#64748b">Units</text></g>`);
+      svg.insertAdjacentHTML("beforeend", `<g><circle cx="${dualM.l+dualW-56}" cy="${dualM.t-11}" r="4" fill="url(#${gradId})"/><text x="${dualM.l+dualW-47}" y="${dualM.t-8}" font-size="10" fill="#64748b">Units</text></g>`);
     }
-    drawXLabels(points);
+    drawDualXLabels(points);
     return;
   }
 
