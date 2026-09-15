@@ -19,6 +19,7 @@ import { parseCsv as parseCSV } from "./data/csv.js";
 import { loadLocalJson, saveLocalJson } from "./data/storage.js";
 import { createSupabaseClient } from "./data/supabase.js";
 import { createFilterControls } from "./dashboard/filters.js";
+import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 const initialState = createInitialDashboardState();
 const supabase = createSupabaseClient({ url:SUPABASE_URL, publishableKey:SUPABASE_PUBLISHABLE_KEY });
 const {
@@ -884,6 +885,24 @@ function shouldShowMonthLabel(i, total){
   if(total <= 24) return i % 3 === 0;
   return i % 6 === 0;
 }
+const { renderTrend } = createSalesTrendRenderer({
+  E,
+  unique:u,
+  monthKey,
+  niceAxisMax,
+  renderYAxis:yAxis,
+  smoothPath,
+  colorForBrand,
+  svgVerticalBar,
+  svgLeftRevealPath,
+  escapeHtml,
+  escapeAttr,
+  formatNumber:fN,
+  truncateLabel,
+  shouldShowMonthLabel,
+  getHiddenTrendBrands:() => hiddenTrendBrands,
+  setHiddenTrendBrands:value => { hiddenTrendBrands = value; }
+});
 const barGrowEase = ".16 1 .3 1";
 let barGrowId = 0;
 let barGrowFrame = 0;
@@ -1018,106 +1037,6 @@ function scheduleSelectedProductCharts(rows, options = {}){
       if(token !== selectedChartsToken) return;
       renderSelectedProductCharts(snapshot, options);
     });
-  });
-}
-
-function renderTrend(rows, target = E.trend, opt = {}){
-  target.innerHTML = "";
-  const isMain = target === E.trend;
-  if(!rows.length){ if(isMain) E.trendEmpty.hidden = false; return; }
-  if(isMain) E.trendEmpty.hidden = true;
-  const renderedWidth = Math.round(target.getBoundingClientRect().width || target.clientWidth || 860);
-  const vw = opt.large ? 1180 : Math.max(860, renderedWidth);
-  const vh = opt.large ? 640 : (isMain ? 300 : 320);
-  target.setAttribute("viewBox", `0 0 ${vw} ${vh}`);
-  const m={
-    t: opt.large ? 54 : (isMain ? 42 : 46),
-    r: opt.large ? 44 : (isMain ? 44 : 30),
-    b: opt.large ? 112 : (isMain ? 58 : 76),
-    l: 56
-  }, W=vw-m.l-m.r, H=vh-m.t-m.b;
-  const months = u(rows.map(x=>monthKey(x.time))).filter(Boolean).sort();
-  const brands = u(rows.map(x=>x.brand)).sort();
-  hiddenTrendBrands = new Set([...hiddenTrendBrands].filter(b => brands.includes(b)));
-  const visibleBrands = brands.filter(b => !hiddenTrendBrands.has(b));
-  const activeBrands = visibleBrands.length ? visibleBrands : brands;
-  if(!visibleBrands.length && brands.length && hiddenTrendBrands.size) hiddenTrendBrands.clear();
-  const s=activeBrands.map(b=>{
-    const map=new Map(months.map(x=>[x,0]));
-    rows.filter(r=>r.brand===b).forEach(r=>{
-      const mk = monthKey(r.time);
-      if(!mk || !map.has(mk)) return;
-      map.set(mk,(map.get(mk)||0)+Math.max(0, Number(r.saleUnits)||0));
-    });
-    return{b,pts:months.map(x=>({m:x,u:map.get(x)}))};
-  });
-  const isBar = E.trendMode.value === "bar";
-  const baseXPad = opt.large ? 18 : (isMain ? 28 : 5);
-  const barSafePad = isBar ? Math.min(Math.max(64, activeBrands.length * 14), Math.max(64, W * 0.08)) : baseXPad;
-  const xPad = Math.max(baseXPad, barSafePad);
-  const plotW = Math.max(1, W - xPad * 2);
-  const xAt = i => m.l + xPad + (months.length===1 ? plotW/2 : plotW*i/(months.length-1));
-  const yM=niceAxisMax(Math.max(...s.flatMap(x=>x.pts.map(p=>p.u)),1)); yAxis(target,m,W,H,yM);
-  const trendHitPoints = [];
-  s.forEach((serie, si)=>{
-    const pts=serie.pts.map((p,i)=>({x:xAt(i),y:m.t+H-(p.u/yM)*H,...p}));
-    const c = colorForBrand(serie.b);
-    if(isBar){
-      const monthSlotW = plotW / Math.max(months.length, 1);
-      const bw = Math.max(3, Math.min(20, (monthSlotW * 0.72) / Math.max(s.length, 1)));
-      const groupTotalW = s.length * bw;
-      pts.forEach((p, i) => {
-        const baseX = xAt(i);
-        const x = Math.max(m.l + 4, Math.min(m.l + W - bw - 4, baseX - (groupTotalW / 2) + (si * bw)));
-        const y = m.t + H - (p.u/yM)*H;
-        const h = (p.u/yM)*H;
-        target.insertAdjacentHTML("beforeend", svgVerticalBar(x, y, bw-1, h, 2, c, `data-tip="${escapeAttr(`${serie.b} | ${p.m}: ${fN(p.u)} units`)}"`, (i * 36) + (si * 18)));
-      });
-    } else {
-      const total = serie.pts.reduce((s0,p)=>s0+p.u,0);
-      const maxTotal = Math.max(...s.map(x=>x.pts.reduce((s0,p)=>s0+p.u,0)),1);
-      const lowSeries = total <= maxTotal * 0.18;
-      const gid = `trend_area_${Math.random().toString(36).slice(2,7)}`;
-      target.insertAdjacentHTML("beforeend", `<defs><linearGradient id="${gid}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="${c}" stop-opacity="0.16"/><stop offset="100%" stop-color="${c}" stop-opacity="0.02"/></linearGradient></defs>`);
-      const d=smoothPath(pts);
-      const area = `${d} L ${pts[pts.length-1].x},${m.t+H} L ${pts[0].x},${m.t+H} Z`;
-      target.insertAdjacentHTML("beforeend", svgLeftRevealPath(area, m.l, m.t, W, H, `url(#${gid})`, `pointer-events="none"`, si * 90));
-      target.insertAdjacentHTML("beforeend", svgLeftRevealPath(d, m.l, m.t, W, H, "none", `stroke="${c}" stroke-width="2.4" ${lowSeries ? `stroke-dasharray="5 4"` : ""} stroke-linecap="round" stroke-linejoin="round" pointer-events="none"`, si * 90));
-      pts.forEach(p=>{
-        const tip = `${serie.b} | ${p.m}: ${fN(p.u)} units`;
-        target.insertAdjacentHTML("beforeend",`<circle cx="${p.x}" cy="${p.y}" r="3.6" fill="#fff" stroke="${c}" stroke-width="1.6" data-tip="${escapeAttr(tip)}"/>`);
-        trendHitPoints.push({ x:p.x, y:p.y, tip });
-      });
-    }
-  });
-  if(!isBar){
-    trendHitPoints.forEach(p => {
-      target.insertAdjacentHTML("beforeend", `<circle cx="${p.x}" cy="${p.y}" r="9" fill="transparent" pointer-events="all" data-tip="${escapeAttr(p.tip)}"/>`);
-    });
-  }
-  months.forEach((mm,i)=>{
-    if(!shouldShowMonthLabel(i, months.length)) return;
-    const x = xAt(i);
-    const y=vh-(opt.large ? 76 : (isMain ? 26 : 54));
-    const anchor = i === 0 ? "start" : (i === months.length - 1 ? "end" : "middle");
-    target.insertAdjacentHTML("beforeend",`<text x="${x}" y="${y}" text-anchor="${anchor}" font-size="${opt.large ? 14 : 12}" fill="#64748b">${escapeHtml(mm)}</text>`);
-  });
-  const legendItems = brands.slice(0,12);
-  const legendY = opt.large ? 22 : 18;
-  const legendGap = opt.large ? 150 : 118;
-  const legendStart = Math.max(m.l, (vw - legendItems.length * legendGap) / 2);
-  legendItems.forEach((b, idx) => {
-    const c = colorForBrand(b);
-    const short = truncateLabel(b, opt.large ? 16 : 12);
-    const hidden = hiddenTrendBrands.has(b);
-    const x = legendStart + idx * legendGap;
-    const hitW = Math.min(legendGap - 8, 18 + short.length * (opt.large ? 8 : 7));
-    target.insertAdjacentHTML("beforeend", `
-      <g data-trend-brand="${escapeAttr(b)}" style="cursor:pointer">
-        <rect x="${x}" y="${legendY-9}" width="10" height="10" rx="2" fill="${c}" opacity="${hidden ? 0.28 : 1}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}"/>
-        <text x="${x+15}" y="${legendY}" font-size="${opt.large ? 13 : 11}" fill="${hidden ? "#94a3b8" : "#334155"}" text-decoration="${hidden ? "line-through" : "none"}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}">${escapeHtml(short)}</text>
-        <rect x="${x-6}" y="${legendY-18}" width="${hitW}" height="26" rx="8" fill="transparent" pointer-events="all" data-trend-brand="${escapeAttr(b)}" data-tip="${escapeAttr(hidden ? `Show ${b}` : `Hide ${b}`)}"/>
-      </g>`);
   });
 }
 
