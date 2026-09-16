@@ -25,6 +25,7 @@ import { createExhibitionTools } from "./information/exhibitions.js";
 import { createResearchLibraryTools } from "./information/research-library.js";
 import { createMarketReportTools } from "./ui/market-report.js";
 import { createUiInteractions } from "./ui/interactions.js";
+import { createChartAnimations } from "./ui/chart-animations.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -729,6 +730,15 @@ function shouldShowMonthLabel(i, total){
   if(total <= 24) return i % 3 === 0;
   return i % 6 === 0;
 }
+const {
+  restartBarAnimations,
+  restartLineAnimations,
+  svgAnimatedLinePath,
+  svgLeftRevealPath,
+  svgHorizontalBar,
+  svgVerticalBar,
+  svgClippedVerticalPath
+} = createChartAnimations();
 const { renderTrend } = createSalesTrendRenderer({
   E,
   unique:u,
@@ -747,95 +757,9 @@ const { renderTrend } = createSalesTrendRenderer({
   getHiddenTrendBrands:() => hiddenTrendBrands,
   setHiddenTrendBrands:value => { hiddenTrendBrands = value; }
 });
-const barGrowEase = ".16 1 .3 1";
-let barGrowId = 0;
-let barGrowFrame = 0;
-let lineGrowId = 0;
-let lineGrowFrame = 0;
 let selectedCardObserver = null;
 let selectedChartsFrame = 0;
 let selectedChartsToken = 0;
-function barGrowTiming(delay = 0){
-  return `data-bar-animate="true" dur="1.2s" begin="${Math.max(0, delay)}ms" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="${barGrowEase}"`;
-}
-function restartBarAnimations(root = document){
-  cancelAnimationFrame(barGrowFrame);
-  barGrowFrame = requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      root.querySelectorAll("animate[data-bar-animate]").forEach(anim => {
-        if(typeof anim.beginElement === "function"){
-          try { anim.beginElement(); } catch(err) {}
-        }
-      });
-      root.querySelectorAll(".ex-bar-fill").forEach(el => {
-        el.style.animation = "none";
-        void el.offsetWidth;
-        el.style.animation = "";
-      });
-    });
-  });
-}
-function lineGrowTiming(delay = 0){
-  return `data-line-animate="true" dur="1.8s" begin="${Math.max(0, delay)}ms" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="${barGrowEase}"`;
-}
-function restartLineAnimations(root = document){
-  cancelAnimationFrame(lineGrowFrame);
-  lineGrowFrame = requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      root.querySelectorAll("animate[data-line-animate]").forEach(anim => {
-        if(typeof anim.beginElement === "function"){
-          try { anim.beginElement(); } catch(err) {}
-        }
-      });
-    });
-  });
-}
-function svgAnimatedLinePath(d, attrs = "", delay = 0){
-  return `<path d="${d}" pathLength="1" stroke-dasharray="1" stroke-dashoffset="1" ${attrs}>` +
-    `<animate attributeName="stroke-dashoffset" from="1" to="0" ${lineGrowTiming(delay)}/>` +
-    `</path>`;
-}
-function svgLeftRevealPath(pathD,x,y,w,h,fill,attrs = "",delay = 0){
-  const id = `lineRevealClip_${lineGrowId++}`;
-  return `<defs><clipPath id="${id}"><rect x="${x}" y="${y}" width="0" height="${h}">` +
-    `<animate attributeName="width" from="0" to="${w}" ${lineGrowTiming(delay)}/>` +
-    `</rect></clipPath></defs><path d="${pathD}" fill="${fill}" clip-path="url(#${id})" ${attrs}/>`;
-}
-function svgHorizontalBar(x,y,w,h,rx,fill,attrs = "",delay = 0){
-  return `<rect x="${x}" y="${y}" width="0" height="${h}" rx="${rx}" fill="${fill}" ${attrs}>` +
-    `<animate attributeName="width" from="0" to="${w}" ${barGrowTiming(delay)}/>` +
-    `</rect>`;
-}
-function svgVerticalBar(x,y,w,h,rx,fill,attrs = "",delay = 0){
-  const base = y + h;
-  return `<rect x="${x}" y="${base}" width="${w}" height="0" rx="${rx}" fill="${fill}" ${attrs}>` +
-    `<animate attributeName="y" from="${base}" to="${y}" ${barGrowTiming(delay)}/>` +
-    `<animate attributeName="height" from="0" to="${h}" ${barGrowTiming(delay)}/>` +
-    `</rect>`;
-}
-function svgClippedVerticalPath(pathD,x,y,w,h,base,fill,attrs = "",delay = 0){
-  const id = `barGrowClip_${barGrowId++}`;
-  return `<defs><clipPath id="${id}"><rect x="${x}" y="${base}" width="${w}" height="0">` +
-    `<animate attributeName="y" from="${base}" to="${y}" ${barGrowTiming(delay)}/>` +
-    `<animate attributeName="height" from="0" to="${h}" ${barGrowTiming(delay)}/>` +
-    `</rect></clipPath></defs><path d="${pathD}" fill="${fill}" clip-path="url(#${id})" ${attrs}/>`;
-}
-const { renderTopProducts } = createRankingRenderer({
-  E,
-  productGroupName,
-  productGroupKey,
-  productKey,
-  colorForBrand,
-  productSeriesColor,
-  formatCurrency:fC,
-  formatNumber:fN,
-  escapeHtml,
-  escapeAttr,
-  introTipHtml,
-  truncateLabel,
-  svgHorizontalBar
-});
-
 function observeSelectedProductCards(){
   if(selectedCardObserver){
     selectedCardObserver.disconnect();
