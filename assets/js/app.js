@@ -9,8 +9,7 @@ import {
   SUPABASE_REPORTS_TABLE,
   SUPABASE_RESEARCH_REPORTS_TABLE,
   SUPABASE_RESEARCH_COVERS_BUCKET,
-  SUPABASE_RESEARCH_PDFS_BUCKET,
-  fallbackPalette
+  SUPABASE_RESEARCH_PDFS_BUCKET
 } from "./config.js";
 import { createInitialDashboardState } from "./state.js";
 import { E } from "./dom.js";
@@ -31,6 +30,10 @@ import { createRankingRenderer } from "./dashboard/ranking.js";
 import { createProductMonthlyRenderer } from "./dashboard/product-monthly.js";
 import { createExecutiveInsightsRenderer } from "./dashboard/insights.js";
 import { createSalesEditor } from "./data-editor/sales-editor.js";
+import { unique as u, toNumber as toNum, inferProductGroup, productGroupName, productGroupKey, normalizeTime, monthKey, monthNumber, monthEndGraceComparisonMonths } from "./utils/data-domain.js";
+import { createColorTools } from "./utils/colors.js";
+import { renderYAxis as yAxis, niceAxisMax, smoothPath, greenByRank, truncateLabel, shouldShowMonthLabel } from "./utils/chart.js";
+import { escapeHtml, escapeAttr, initials, safeUrl } from "./utils/text.js";
 const initialState = createInitialDashboardState();
 const supabase = createSupabaseClient({ url:SUPABASE_URL, publishableKey:SUPABASE_PUBLISHABLE_KEY });
 const {
@@ -85,115 +88,14 @@ const { observeRevealCards, bindTooltip } = createUiInteractions({
   escapeHtml,
   getProductIntro:() => productIntro,
   findProductIntro
-});const u = a => [...new Set(a)];
-const fN = v => new Intl.NumberFormat("en-US",{maximumFractionDigits:0}).format(v);
-const fC = v => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(v);
-const toNum = v => Number(String(v??"").replace(/[$,]/g,"").trim());
-const hashColor = key => fallbackPalette[Math.abs([...key].reduce((s,c)=>s+c.charCodeAt(0),0)) % fallbackPalette.length];
-const productKey = r => `${r.brand}||${r.product}`;
-function inferProductGroup(product){
-  const original = String(product || "").trim();
-  if(!original) return "";
-  const colorWords = "(white|black|charcoal|gray|grey|pink|blue|green|red|silver|gold|beige|brown|cream|navy|orange|yellow|purple|teal|mint|clear|natural)";
-  let group = original
-    .replace(new RegExp(`\\s*\\(${colorWords}\\)\\s*$`, "i"), "")
-    .replace(new RegExp(`[\\s_/-]+${colorWords}\\s*$`, "i"), "")
-    .replace(/\s{2,}/g, " ")
-    .replace(/[-_/]\s*$/, "")
-    .trim();
-  return group || original;
-}
-function productGroupName(r){
-  return String(r?.productGroup ?? r?.product_group ?? r?.productGroupName ?? "").trim() || inferProductGroup(r?.product);
-}
-const productGroupKey = r => `${r.brand}||${productGroupName(r)}`;
-function hexToRgb(hex){
-  const m = String(hex || "").trim().match(/^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i);
-  if(!m) return { r: 29, g: 78, b: 216 };
-  return { r: parseInt(m[1],16), g: parseInt(m[2],16), b: parseInt(m[3],16) };
-}
-function rgbToHex(r,g,b){
-  const clamp = v => Math.max(0, Math.min(255, Math.round(v)));
-  return `#${[clamp(r),clamp(g),clamp(b)].map(v => v.toString(16).padStart(2,"0")).join("")}`;
-}
-function mixColor(hex, targetHex, ratio){
-  const a = hexToRgb(hex);
-  const b = hexToRgb(targetHex);
-  const t = Math.max(0, Math.min(1, ratio));
-  return rgbToHex(a.r + (b.r - a.r) * t, a.g + (b.g - a.g) * t, a.b + (b.b - a.b) * t);
-}
-function shadeColor(hex, delta){
-  if(delta >= 0) return mixColor(hex, "#ffffff", Math.min(delta, 0.65));
-  return mixColor(hex, "#000000", Math.min(Math.abs(delta), 0.45));
-}
-function colorForBrand(brand){
-  if(!brandColors[brand]){
-    const classic = ["#1d4ed8","#f97316","#06b6d4","#16a34a","#349ce4","#0f766e","#eab308","#64748b","#ec4899"];
-    const key = String(brand || "").toLowerCase().replace(/\s+/g, "");
-    if(key === "babybrezza") brandColors[brand] = "#ef4444";
-    else brandColors[brand] = classic[Math.abs([...(brand || "")].reduce((s,c)=>s+c.charCodeAt(0),0)) % classic.length];
-  }
-  return brandColors[brand];
-}
-function colorForProduct(brand, product){
-  const base = colorForBrand(brand).toLowerCase();
-  const toneMap = {
-    "#1d4ed8":["#1d4ed8","#2563eb","#3b82f6","#60a5fa","#93c5fd"],
-    "#ef4444":["#dc2626","#ef4444","#f87171","#fca5a5","#b91c1c"],
-    "#f97316":["#ea580c","#f97316","#fb923c","#fdba74","#c2410c"],
-    "#06b6d4":["#0891b2","#06b6d4","#22d3ee","#67e8f9","#0e7490"],
-    "#16a34a":["#15803d","#16a34a","#22c55e","#4ade80","#166534"],
-    "#349ce4":["#1c4c74","#349ce4","#67b7ee","#bfdbfe","#0f3d5f"],
-    "#0f766e":["#0f766e","#14b8a6","#2dd4bf","#5eead4","#115e59"],
-    "#eab308":["#ca8a04","#eab308","#facc15","#fde047","#a16207"],
-    "#64748b":["#475569","#64748b","#94a3b8","#cbd5e1","#334155"],
-    "#ec4899":["#db2777","#ec4899","#f472b6","#f9a8d4","#be185d"]
-  };
-  const tones = toneMap[base] || [
-    shadeColor(base, -0.22),
-    base,
-    shadeColor(base, 0.18),
-    shadeColor(base, 0.34),
-    shadeColor(base, -0.36)
-  ];
-  const seed = Math.abs([...(product || "")].reduce((s,c)=>s+c.charCodeAt(0),0)) % tones.length;
-  return tones[seed];
-}
-function productSeriesColor(brand, product){
-  return colorForProduct(brand, product);
-}
-function normalizeTime(v){
-  const s = String(v || "").trim();
-  const m = s.match(/(\d{4})[\/\-](\d{1,2})(?:[\/\-](\d{1,2}))?/);
-  if(m){
-    const y = m[1];
-    const mo = String(m[2]).padStart(2,"0");
-    if(m[3]){
-      const d = String(m[3]).padStart(2,"0");
-      return `${y}-${mo}-${d}`;
-    }
-    return `${y}-${mo}`;
-  }
-  const d = new Date(s);
-  if(!Number.isNaN(d.getTime())){
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
-  }
-  return "";
-}
-function monthKey(v){
-  const t = normalizeTime(v);
-  const m = String(t).match(/^(\d{4})-(\d{2})/);
-  return m ? `${m[1]}-${m[2]}` : "";
-}
+});const fN = value => new Intl.NumberFormat("en-US", { maximumFractionDigits:0 }).format(value);
+const fC = value => new Intl.NumberFormat("en-US", { style:"currency", currency:"USD", maximumFractionDigits:0 }).format(value);
+const { colorForBrand, productSeriesColor } = createColorTools({ getBrandColors:() => brandColors });
 const {
   csvMap,
   keyPart,
-  rowKey,
   upsertRows,
   normalizeRawSale,
-  dailyRowKey,
-  monthlyScopeKey,
-  isMonthOnlyTime,
   legacyMonthlyToRawRows,
   upsertRawSalesRows,
   rebuildMonthlySalesFromRaw,
@@ -206,54 +108,30 @@ const {
   toNumber:toNum,
   productGroupName
 });
-function mN(v){
-  const t = monthKey(v);
-  return t ? Number(t.replace("-","")) : NaN;
-}
 const { renderDropdown, renderChips, refreshFilterUI, syncScopedOptions, filteredRows } = createFilterControls({
   E,
   getData:() => data,
   getMonths:months,
   selection,
   unique:u,
-  monthToNumber:mN,
+  monthToNumber:monthNumber,
   escapeHtml,
   renderAll,
   getActiveDropdownType:() => activeDropdownType
 });
-function shiftMonth(ym, delta){
-  const [y,m] = String(ym || "").split("-").map(Number);
-  const d = new Date(y || new Date().getFullYear(), (m || 1) - 1 + delta, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2,"0")}`;
-}
-function monthEndGraceComparisonMonths(rows, graceDays = 2){
-  const rowMonths = u((rows || []).map(r => monthKey(r.time)).filter(Boolean)).sort();
-  const now = new Date();
-  const currentCalendarMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2,"0")}`;
-  const daysInCurrentMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  const daysUntilMonthEnd = daysInCurrentMonth - now.getDate();
-  const canUseCurrentMonth = rowMonths.includes(currentCalendarMonth) && daysUntilMonthEnd <= graceDays;
-  const currentMonth = canUseCurrentMonth ? currentCalendarMonth : shiftMonth(currentCalendarMonth, -1);
+function norm(row){
+  const product = String(row.product || "").trim();
   return {
-    currentMonth,
-    previousMonth:shiftMonth(currentMonth, -1),
-    usesCurrentPartialMonth:canUseCurrentMonth
-  };
-}
-function norm(r){
-  const product = String(r.product || "").trim();
-  return {
-    category:String(r.category || "Other").trim() || "Other",
-    brand:String(r.brand || "").trim(),
+    category:String(row.category || "Other").trim() || "Other",
+    brand:String(row.brand || "").trim(),
     product,
-    productGroup:String(r.productGroup ?? r.product_group ?? r.productGroupName ?? r.parentProduct ?? r.productFamily ?? "").trim() || inferProductGroup(product),
-    time:normalizeTime(r.time),
-    saleUnits:Math.max(0, Math.round(toNum(r.saleUnits) || 0)),
-    price:Math.max(0, toNum(r.price) || 0)
+    productGroup:String(row.productGroup ?? row.product_group ?? row.productGroupName ?? row.parentProduct ?? row.productFamily ?? "").trim() || inferProductGroup(product),
+    time:normalizeTime(row.time),
+    saleUnits:Math.max(0, Math.round(toNum(row.saleUnits) || 0)),
+    price:Math.max(0, toNum(row.price) || 0)
   };
 }
-function months(){ return u(data.map(x => monthKey(x.time))).filter(Boolean).sort(); }
-
+function months(){ return u(data.map(row => monthKey(row.time))).filter(Boolean).sort(); }
 const { defaultMarketReportHtml, openMarketReport, closeMarketReport, bindMarketReportControls } = createMarketReportTools({
   E,
   escapeAttr,
@@ -674,57 +552,6 @@ const { kpi, renderExecutiveInsights } = createExecutiveInsightsRenderer({
   escapeHtml
 });
 
-function yAxis(svg,m,w,h,yM){
-  const dec = yM <= 20 ? 1 : 0;
-  for(let i=0;i<=4;i++){
-    const y = m.t + h - (h*i/4);
-    const raw = yM*i/4;
-    const v = dec ? Number(raw.toFixed(1)) : Math.round(raw);
-    svg.insertAdjacentHTML("beforeend", `<line x1="${m.l}" y1="${y}" x2="${m.l+w}" y2="${y}" stroke="#f0f0f0"/><text x="${m.l-8}" y="${y+4}" font-size="10.5" text-anchor="end" fill="#7b8794">${v}</text>`);
-  }
-}
-function niceAxisMax(maxVal){
-  const v = Number(maxVal) || 0;
-  if(v <= 0) return 1;
-  const padded = v * 1.15;
-  const exp = Math.floor(Math.log10(padded));
-  const base = Math.pow(10, exp);
-  const n = padded / base;
-  let step = 10;
-  if(n <= 1) step = 1;
-  else if(n <= 2) step = 2;
-  else if(n <= 2.5) step = 2.5;
-  else if(n <= 5) step = 5;
-  return step * base;
-}
-function smoothPath(points){
-  if(points.length < 2) return points.length ? `M${points[0].x},${points[0].y}` : "";
-  let d = `M${points[0].x},${points[0].y}`;
-  for(let i=1;i<points.length;i++){
-    const prev = points[i-1];
-    const cur = points[i];
-    const cx = (prev.x + cur.x) / 2;
-    d += ` Q${cx},${prev.y} ${cur.x},${cur.y}`;
-  }
-  return d;
-}
-function greenByRank(rank, total){
-  const ramp = ["#0f5132","#146c43","#198754","#2aa66f","#44c18b","#7ddcb8","#b8efdc"];
-  if(total <= 1) return ramp[0];
-  const idx = Math.min(ramp.length - 1, Math.round((rank/(total-1))*(ramp.length-1)));
-  return ramp[idx];
-}
-function truncateLabel(text, maxChars){
-  const s = String(text || "");
-  return s.length > maxChars ? `${s.slice(0, Math.max(0, maxChars - 3))}...` : s;
-}
-function shouldShowMonthLabel(i, total){
-  if(total <= 6) return true;
-  if(i === 0 || i === total - 1) return true;
-  if(total <= 12) return i % 2 === 0;
-  if(total <= 24) return i % 3 === 0;
-  return i % 6 === 0;
-}
 const {
   restartBarAnimations,
   restartLineAnimations,
@@ -1060,25 +887,6 @@ function toggleFilterCombo(open){
   E.filterComboBtn.setAttribute("aria-expanded", next ? "true" : "false");
 }
 
-function escapeHtml(s){
-  return String(s).replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-}
-function escapeAttr(s){
-  return String(s).replaceAll("&","&amp;").replaceAll('"',"&quot;").replaceAll("<","&lt;").replaceAll(">","&gt;");
-}
-
-function initials(name){
-  const parts = String(name || "Brand").trim().split(/\s+/).filter(Boolean);
-  return (parts.length > 1 ? `${parts[0][0]}${parts[1][0]}` : (parts[0] || "BR").slice(0,2)).toUpperCase();
-}
-function brandProfileId(index){
-  return `BRD-${String(index + 1).padStart(3,"0")}`;
-}
-function safeUrl(url){
-  const s = String(url || "").trim();
-  if(!s) return "#";
-  return /^https?:\/\//i.test(s) ? s : `https://${s}`;
-}
 const { renderBrandPortfolio } = createBrandPortfolioRenderer({
   E,
   unique:u,
