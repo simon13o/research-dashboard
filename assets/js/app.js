@@ -23,6 +23,7 @@ import { createBrandPortfolioRenderer } from "./information/brands.js";
 import { createProductInformationRenderer } from "./information/products.js";
 import { createExhibitionTools } from "./information/exhibitions.js";
 import { createResearchLibraryTools } from "./information/research-library.js";
+import { createMarketReportTools } from "./ui/market-report.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -251,29 +252,12 @@ function norm(r){
 }
 function months(){ return u(data.map(x => monthKey(x.time))).filter(Boolean).sort(); }
 
-function defaultMarketReportHtml(){
-  return `
-    <h2>Top Opportunities</h2>
-    <ul>
-      <li><b>Opportunity 1:</b> Add the strongest product/category signal here.</li>
-      <li><b>Opportunity 2:</b> Note any fast-growing product, SKU, or competitor gap.</li>
-    </ul>
-    <h2>Market Alerts</h2>
-    <ul>
-      <li><mark>Watch list:</mark> Track abnormal sales movement, price shifts, or new competitor activity.</li>
-    </ul>
-    <h2>Innovative Functions</h2>
-    <ul>
-      <li>Summarize product functions worth sharing with engineering or product teams.</li>
-    </ul>
-    <h2>Action Items</h2>
-    <ul>
-      <li><b>CEO:</b> Decision or investment question.</li>
-      <li><b>Sales:</b> Follow-up target or customer angle.</li>
-      <li><b>Engineering:</b> Feature research or feasibility note.</li>
-    </ul>
-  `;
-}
+const { defaultMarketReportHtml, openMarketReport, closeMarketReport, bindMarketReportControls } = createMarketReportTools({
+  E,
+  escapeAttr,
+  getReportHtml:() => marketReportHtml,
+  setReportHtml:value => { marketReportHtml = value; }
+});
 
 function activeTabId(){
   const b = E.tabs.find(x => x.classList.contains("active"));
@@ -1138,18 +1122,6 @@ function closeZoom(){
   E.zoomModal.setAttribute("aria-hidden","true");
   E.zoomSvg.innerHTML = "";
 }
-function openMarketReport(){
-  if(!marketReportHtml || !marketReportHtml.trim()) marketReportHtml = defaultMarketReportHtml();
-  E.marketReportEditor.innerHTML = marketReportHtml;
-  E.marketReportDrawer.classList.add("open");
-  E.marketReportDrawer.setAttribute("aria-hidden", "false");
-  E.marketReportStatus.textContent = "Editable report. Remember to save changes.";
-  setTimeout(() => E.marketReportEditor.focus(), 40);
-}
-function closeMarketReport(){
-  E.marketReportDrawer.classList.remove("open");
-  E.marketReportDrawer.setAttribute("aria-hidden", "true");
-}
 async function saveMarketReport(){
   marketReportHtml = E.marketReportEditor.innerHTML;
   saveState();
@@ -1161,31 +1133,6 @@ async function saveMarketReport(){
     E.marketReportStatus.textContent = "Saved locally. Cloud sync failed.";
     alert(`Report cloud sync failed: ${err && err.message ? err.message : err}`);
   }
-}
-function insertReportTemplate(){
-  E.marketReportEditor.focus();
-  document.execCommand("insertHTML", false, defaultMarketReportHtml());
-}
-function toggleReportHighlight(){
-  E.marketReportEditor.focus();
-  document.execCommand("backColor", false, "#fef3c7");
-}
-function insertReportImage(file){
-  if(!file) return;
-  if(!file.type || !file.type.startsWith("image/")){
-    alert("Please choose an image file.");
-    return;
-  }
-  const reader = new FileReader();
-  reader.onload = () => {
-    const src = String(reader.result || "");
-    if(!src) return;
-    E.marketReportEditor.focus();
-    const imgHtml = `<figure class="report-image-figure"><img src="${escapeAttr(src)}" alt="Report image"><figcaption>Image note...</figcaption></figure>`;
-    document.execCommand("insertHTML", false, imgHtml);
-    E.marketReportStatus.textContent = "Unsaved changes";
-  };
-  reader.readAsDataURL(file);
 }
 function closeBrandColorPopover(){
   E.brandColorPopover.hidden = true;
@@ -1597,34 +1544,7 @@ function init(){
   });
   E.zoomCloseBtn.addEventListener("click", closeZoom);
   E.zoomModal.addEventListener("click", e => { if(e.target === E.zoomModal) closeZoom(); });
-  E.marketReportEntry.addEventListener("click", openMarketReport);
-  E.marketReportClose.addEventListener("click", closeMarketReport);
-  E.marketReportDrawer.addEventListener("click", e => { if(e.target === E.marketReportDrawer) closeMarketReport(); });
-  E.marketReportSave.addEventListener("click", saveMarketReport);
-  E.marketReportEditor.addEventListener("input", () => {
-    E.marketReportStatus.textContent = "Unsaved changes";
-  });
-  E.reportToolbarBtns.forEach(btn => btn.addEventListener("click", () => {
-    if(btn.dataset.reportCmd){
-      E.marketReportEditor.focus();
-      document.execCommand(btn.dataset.reportCmd, false, null);
-    } else if(btn.dataset.reportBlock){
-      E.marketReportEditor.focus();
-      document.execCommand("formatBlock", false, btn.dataset.reportBlock);
-    } else if(btn.hasAttribute("data-report-mark")){
-      toggleReportHighlight();
-    } else if(btn.hasAttribute("data-report-image")){
-      E.marketReportImageInput.value = "";
-      E.marketReportImageInput.click();
-    } else if(btn.hasAttribute("data-report-template")){
-      insertReportTemplate();
-    }
-    if(!btn.hasAttribute("data-report-image")) E.marketReportStatus.textContent = "Unsaved changes";
-  }));
-  E.marketReportImageInput.addEventListener("change", () => {
-    const file = E.marketReportImageInput.files && E.marketReportImageInput.files[0];
-    insertReportImage(file);
-  });
+  bindMarketReportControls({ onSave:saveMarketReport });
   E.filterComboBtn.addEventListener("click", e => {
     e.stopPropagation();
     toggleFilterCombo();
