@@ -31,7 +31,7 @@ import { createRankingRenderer } from "./dashboard/ranking.js";
 import { createProductMonthlyRenderer } from "./dashboard/product-monthly.js";
 import { createExecutiveInsightsRenderer } from "./dashboard/insights.js";
 import { createSalesEditor } from "./data-editor/sales-editor.js";
-import { unique as u, toNumber as toNum, inferProductGroup, productGroupName, productGroupKey, normalizeTime, monthKey, monthNumber, monthEndGraceComparisonMonths } from "./utils/data-domain.js";
+import { unique as u, toNumber as toNum, inferProductGroup, productKey, productGroupName, productGroupKey, normalizeTime, monthKey, monthNumber, monthEndGraceComparisonMonths } from "./utils/data-domain.js";
 import { createColorTools } from "./utils/colors.js";
 import { renderYAxis as yAxis, niceAxisMax, smoothPath, greenByRank, truncateLabel, shouldShowMonthLabel } from "./utils/chart.js";
 import { escapeHtml, escapeAttr, initials, safeUrl } from "./utils/text.js";
@@ -132,6 +132,7 @@ function norm(row){
   };
 }
 function months(){ return u(data.map(row => monthKey(row.time))).filter(Boolean).sort(); }
+function brandProfileId(index){ return `BRD-${String(index + 1).padStart(3, "0")}`; }
 const { defaultMarketReportHtml, openMarketReport, closeMarketReport, bindMarketReportControls } = createMarketReportTools({
   E,
   escapeAttr,
@@ -425,6 +426,21 @@ const { renderTrend } = createSalesTrendRenderer({
   shouldShowMonthLabel,
   getHiddenTrendBrands:() => hiddenTrendBrands,
   setHiddenTrendBrands:value => { hiddenTrendBrands = value; }
+});
+const { renderTopProducts } = createRankingRenderer({
+  E,
+  productGroupName,
+  productGroupKey,
+  productKey,
+  colorForBrand,
+  productSeriesColor,
+  formatCurrency:fC,
+  formatNumber:fN,
+  escapeHtml,
+  escapeAttr,
+  introTipHtml,
+  truncateLabel,
+  svgHorizontalBar
 });
 let selectedCardObserver = null;
 let selectedChartsFrame = 0;
