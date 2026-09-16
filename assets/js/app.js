@@ -10,8 +10,7 @@ import {
   SUPABASE_RESEARCH_REPORTS_TABLE,
   SUPABASE_RESEARCH_COVERS_BUCKET,
   SUPABASE_RESEARCH_PDFS_BUCKET,
-  fallbackPalette,
-  COLOR_OPTIONS
+  fallbackPalette
 } from "./config.js";
 import { createInitialDashboardState } from "./state.js";
 import { E } from "./dom.js";
@@ -31,6 +30,7 @@ import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
 import { createProductMonthlyRenderer } from "./dashboard/product-monthly.js";
 import { createExecutiveInsightsRenderer } from "./dashboard/insights.js";
+import { createSalesEditor } from "./data-editor/sales-editor.js";
 const initialState = createInitialDashboardState();
 const supabase = createSupabaseClient({ url:SUPABASE_URL, publishableKey:SUPABASE_PUBLISHABLE_KEY });
 const {
@@ -66,11 +66,6 @@ let productInfoEditMode = initialState.productInfoEditMode;
 let productInfoSearchText = initialState.productInfoSearchText;
 let productInfoCategoryFilter = initialState.productInfoCategoryFilter;
 let productInfoBrandFilter = initialState.productInfoBrandFilter;
-let editorSearchText = initialState.editorSearchText;
-let editorFilters = initialState.editorFilters;
-let editorSort = initialState.editorSort;
-let editorSelectedRows = initialState.editorSelectedRows;
-let editorVisibleRows = initialState.editorVisibleRows;
 let loadedUiState = initialState.loadedUiState;
 let activeDropdownType = initialState.activeDropdownType;
 let marketReportHtml = initialState.marketReportHtml;
@@ -440,7 +435,7 @@ async function loadSupabaseSalesData(){
     if(!ms.includes(E.from.value)) E.from.value = ms[0];
     if(!ms.includes(E.to.value)) E.to.value = ms[ms.length - 1];
   }
-  editorSelectedRows.clear();
+  salesEditor.clearSelection();
   renderAll();
   saveState();
   return true;
@@ -826,105 +821,26 @@ const { renderSelectedProductPreview, renderSelectedProductCharts } = createProd
   getShowPriceInDual:() => showPriceInDual
 });
 
-function renderColorOptions(rows){
-  E.colorList.innerHTML = "";
-  const brands = u(data.map(x => x.brand)).filter(Boolean).sort();
-  E.colorEmpty.hidden = brands.length !== 0;
-  brands.forEach(brand => {
-    if(!brandColors[brand]) brandColors[brand] = hashColor(brand);
-    const item = document.createElement("div");
-    item.className = "color-item";
-    item.innerHTML = `
-      <span>${escapeHtml(brand)}</span>
-      <div style="display:flex;align-items:center;gap:8px">
-        <select class="color-select" style="width:140px">
-          ${COLOR_OPTIONS.map(opt => `<option value="${opt.value}" ${opt.value.toLowerCase() === brandColors[brand].toLowerCase() ? "selected" : ""}>${opt.label}</option>`).join("")}
-        </select>
-        <div class="color-swatch" style="width:22px;height:22px;border-radius:5px;border:1px solid var(--bd);background:${brandColors[brand]}"></div>
-      </div>
-    `;
-    const range = item.querySelector(".color-select");
-    const swatch = item.querySelector(".color-swatch");
-    range.addEventListener("change", e => {
-      brandColors[brand] = e.target.value;
-      swatch.style.background = brandColors[brand];
-      saveState();
-      renderAll();
-    });
-    E.colorList.appendChild(item);
-  });
-}
-
-
-function editorTable(){
-  E.editBody.innerHTML = "";
-  const fillSelect = (el, values, current, allLabel) => {
-    if(!el) return "";
-    const safeCurrent = values.includes(current) ? current : "";
-    el.innerHTML = `<option value="">${allLabel}</option>${values.map(v => `<option value="${escapeAttr(v)}" ${v===safeCurrent?"selected":""}>${escapeHtml(v)}</option>`).join("")}`;
-    return safeCurrent;
-  };
-  const categories = u(data.map(r => r.category).filter(Boolean)).sort();
-  editorFilters.category = fillSelect(E.editorCategoryFilter, categories, editorFilters.category, "All Categories");
-  const brandBase = editorFilters.category ? data.filter(r => r.category === editorFilters.category) : data;
-  const brands = u(brandBase.map(r => r.brand).filter(Boolean)).sort();
-  editorFilters.brand = fillSelect(E.editorBrandFilter, brands, editorFilters.brand, "All Brands");
-  const productBase = brandBase.filter(r => !editorFilters.brand || r.brand === editorFilters.brand);
-  const products = u(productBase.map(r => r.product).filter(Boolean)).sort();
-  editorFilters.product = fillSelect(E.editorProductFilter, products, editorFilters.product, "All Products");
-  const monthBase = productBase.filter(r => !editorFilters.product || r.product === editorFilters.product);
-  const monthsList = u(monthBase.map(r => monthKey(r.time)).filter(Boolean)).sort();
-  editorFilters.month = fillSelect(E.editorMonthFilter, monthsList, editorFilters.month, "All Months");
-
-  const q = editorSearchText.trim().toLowerCase();
-  let rows = data.map((row, index) => ({ row, index })).filter(({row}) => {
-    if(editorFilters.category && row.category !== editorFilters.category) return false;
-    if(editorFilters.brand && row.brand !== editorFilters.brand) return false;
-    if(editorFilters.product && row.product !== editorFilters.product) return false;
-    if(editorFilters.month && monthKey(row.time) !== editorFilters.month) return false;
-    if(!q) return true;
-    return [row.category, row.brand, row.product, row.productGroup, row.time].join(" ").toLowerCase().includes(q);
-  });
-  if(editorSort.key){
-    const key = editorSort.key;
-    const dir = editorSort.dir === "desc" ? -1 : 1;
-    rows = rows.slice().sort((a,b) => {
-      const av = key === "saleUnits" || key === "price" ? Number(a.row[key]) || 0 : String(a.row[key] || "").toLowerCase();
-      const bv = key === "saleUnits" || key === "price" ? Number(b.row[key]) || 0 : String(b.row[key] || "").toLowerCase();
-      if(av < bv) return -1 * dir;
-      if(av > bv) return 1 * dir;
-      return a.index - b.index;
-    });
-  }
-  if(E.editorRowCount) E.editorRowCount.textContent = `Showing ${rows.length} / ${data.length}`;
-  editorSelectedRows = new Set([...editorSelectedRows].filter(i => i >= 0 && i < data.length));
-  editorVisibleRows = rows.map(({index}) => index);
-  const visibleSelectedCount = editorVisibleRows.filter(i => editorSelectedRows.has(i)).length;
-  if(E.editorSelectAll){
-    E.editorSelectAll.checked = editorVisibleRows.length > 0 && visibleSelectedCount === editorVisibleRows.length;
-    E.editorSelectAll.indeterminate = visibleSelectedCount > 0 && visibleSelectedCount < editorVisibleRows.length;
-    E.editorSelectAll.disabled = editorVisibleRows.length === 0;
-  }
-  if(E.editorBulkToolbar) E.editorBulkToolbar.classList.toggle("has-selection", editorSelectedRows.size > 0);
-  if(E.editorBulkCount) E.editorBulkCount.textContent = `${editorSelectedRows.size} row${editorSelectedRows.size === 1 ? "" : "s"} selected`;
-  if(!editorSelectedRows.size && E.editorBulkMenu){
-    E.editorBulkMenu.classList.remove("open");
-    E.editorBulkMore?.setAttribute("aria-expanded", "false");
-  }
-  if(E.editorSortBtns){
-    E.editorSortBtns.forEach(btn => {
-      const active = btn.dataset.sortKey === editorSort.key;
-      btn.classList.toggle("active", active);
-      const indicator = btn.querySelector(".sort-indicator");
-      if(indicator) indicator.textContent = active ? (editorSort.dir === "asc" ? "↑" : "↓") : "↕";
-    });
-  }
-  rows.forEach(({row:r,index:i}) => {
-    const tr = document.createElement("tr");
-    tr.innerHTML = `<td class="editor-select-cell"><input class="editor-row-select" type="checkbox" data-row-index="${i}" ${editorSelectedRows.has(i) ? "checked" : ""} aria-label="Select row"></td><td contenteditable data-i="${i}" data-k="category">${escapeHtml(r.category)}</td><td class="brand-cell" contenteditable data-i="${i}" data-k="brand"><span class="brand-text">${escapeHtml(r.brand)}</span><button class="brand-color-trigger" type="button" contenteditable="false" data-brand="${escapeAttr(r.brand)}" title="Brand color" aria-label="Edit brand color"><svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M12 3a9 9 0 0 0 0 18h1.1a2.1 2.1 0 0 0 1.49-3.58.9.9 0 0 1 .64-1.53H17a4 4 0 0 0 4-4C21 7 17 3 12 3Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><circle cx="7.5" cy="10" r="1.2" fill="currentColor"/><circle cx="10.5" cy="7" r="1.2" fill="currentColor"/><circle cx="14" cy="7.5" r="1.2" fill="currentColor"/><circle cx="16.5" cy="11" r="1.2" fill="currentColor"/></svg></button></td><td contenteditable data-i="${i}" data-k="product">${escapeHtml(r.product)}</td><td contenteditable data-i="${i}" data-k="productGroup">${escapeHtml(r.productGroup || inferProductGroup(r.product))}</td><td contenteditable data-i="${i}" data-k="time">${escapeHtml(r.time)}</td><td contenteditable data-i="${i}" data-k="saleUnits">${r.saleUnits}</td><td contenteditable data-i="${i}" data-k="price">${r.price.toFixed(2)}</td>`;
-    E.editBody.appendChild(tr);
-  });
-}
+const salesEditor = createSalesEditor({
+  E,
+  escapeHtml,
+  escapeAttr,
+  unique:u,
+  monthKey,
+  inferProductGroup,
+  normalizeRow:norm,
+  toNumber:toNum,
+  getData:() => data,
+  setData:next => {
+    data = next;
+    rawSalesRows = legacyMonthlyToRawRows(data);
+  },
+  getBrandColors:() => brandColors,
+  ensureBrandColor:colorForBrand,
+  saveState,
+  renderAll,
+  scheduleCloudSync:scheduleSalesCloudSync
+});
 
 function renderDashboard(){
   refreshFilterUI();
@@ -933,7 +849,7 @@ function renderDashboard(){
   renderExecutiveInsights(rows);
   renderTrend(rows);
   renderTopProducts(rows);
-  renderColorOptions(rows);
+  salesEditor.renderColorOptions();
 
   renderSelectedProductPreview(rows);
   scheduleSelectedProductCharts(rows);
@@ -953,7 +869,7 @@ function renderActiveTabExtras(){
   const tab = activeTabId();
   if(tab === "edit"){
     if(activeDataEditorView() === "exhibitionData") renderExhibitionEditor();
-    else editorTable();
+    else salesEditor.renderTable();
     return;
   }
   if(tab === "intro"){
@@ -1039,31 +955,6 @@ async function saveMarketReport(){
     alert(`Report cloud sync failed: ${err && err.message ? err.message : err}`);
   }
 }
-function closeBrandColorPopover(){
-  E.brandColorPopover.hidden = true;
-  E.brandColorPopover.innerHTML = "";
-}
-function openBrandColorPopover(brand, anchor){
-  if(!brand) return;
-  const current = colorForBrand(brand);
-  E.brandColorPopover.innerHTML = `
-    <b>${escapeHtml(brand)}</b>
-    <input type="color" value="${escapeAttr(current)}" data-brand="${escapeAttr(brand)}">
-    <div class="brand-color-swatches">
-      ${COLOR_OPTIONS.map(x => `<button type="button" class="brand-color-swatch" style="background:${x.value}" data-brand="${escapeAttr(brand)}" data-color="${x.value}" title="${escapeAttr(x.label)}"></button>`).join("")}
-    </div>
-  `;
-  const rect = anchor.getBoundingClientRect();
-  E.brandColorPopover.style.left = `${Math.min(window.innerWidth - 200, rect.right + 8)}px`;
-  E.brandColorPopover.style.top = `${Math.min(window.innerHeight - 160, rect.top - 6)}px`;
-  E.brandColorPopover.hidden = false;
-}
-function setBrandColor(brand, color){
-  brandColors[brand] = color;
-  saveState();
-  renderAll();
-}
-
 const {
   normalizeExhibition,
   exhibitionCsvMap,
@@ -1609,102 +1500,7 @@ function init(){
     else expandedProductCharts.add(key);
     renderSelectedProductCharts(filteredRows(), { animateCards:false });
   });
-  E.editorSearch.addEventListener("input", () => {
-    editorSearchText = E.editorSearch.value || "";
-    editorTable();
-  });
-  E.editorCategoryFilter.addEventListener("change", () => {
-    editorFilters.category = E.editorCategoryFilter.value || "";
-    editorFilters.brand = "";
-    editorFilters.product = "";
-    editorFilters.month = "";
-    editorTable();
-  });
-  E.editorBrandFilter.addEventListener("change", () => {
-    editorFilters.brand = E.editorBrandFilter.value || "";
-    editorFilters.product = "";
-    editorFilters.month = "";
-    editorTable();
-  });
-  E.editorProductFilter.addEventListener("change", () => {
-    editorFilters.product = E.editorProductFilter.value || "";
-    editorFilters.month = "";
-    editorTable();
-  });
-  E.editorMonthFilter.addEventListener("change", () => {
-    editorFilters.month = E.editorMonthFilter.value || "";
-    editorTable();
-  });
-  E.editorSortBtns.forEach(btn => btn.addEventListener("click", () => {
-    const key = btn.dataset.sortKey || "";
-    if(editorSort.key === key) editorSort.dir = editorSort.dir === "asc" ? "desc" : "asc";
-    else editorSort = { key, dir:"asc" };
-    editorTable();
-  }));
-  E.editorSelectAll.addEventListener("change", () => {
-    if(E.editorSelectAll.checked) editorVisibleRows.forEach(i => editorSelectedRows.add(i));
-    else editorVisibleRows.forEach(i => editorSelectedRows.delete(i));
-    editorTable();
-  });
-  E.editorBulkApply.addEventListener("click", () => {
-    if(!editorSelectedRows.size){ alert("Please select at least one row first."); return; }
-    const field = E.editorBulkField.value || "";
-    const value = E.editorBulkValue.value.trim();
-    if(!field){ alert("Please choose a field to update."); return; }
-    if(value === ""){ alert("Please enter a new value."); return; }
-    let nextValue = value;
-    if(field === "saleUnits"){
-      const n = Math.round(Number(value));
-      if(!Number.isFinite(n)){ alert("Sales Units must be a number."); return; }
-      nextValue = Math.max(0, n);
-    }
-    if(field === "price"){
-      const n = Number(value);
-      if(!Number.isFinite(n)){ alert("Price must be a number."); return; }
-      nextValue = Math.max(0, n);
-    }
-    editorSelectedRows.forEach(i => {
-      if(data[i]){
-        data[i][field] = nextValue;
-        data[i] = norm(data[i]);
-      }
-    });
-    rawSalesRows = legacyMonthlyToRawRows(data);
-    E.editorBulkValue.value = "";
-    applyAndSave();
-    scheduleSalesCloudSync(300);
-  });
-  E.editorBulkMore.addEventListener("click", ev => {
-    ev.stopPropagation();
-    const open = !E.editorBulkMenu.classList.contains("open");
-    E.editorBulkMenu.classList.toggle("open", open);
-    E.editorBulkMore.setAttribute("aria-expanded", open ? "true" : "false");
-  });
-  E.editorBulkClear.addEventListener("click", () => {
-    editorSelectedRows.clear();
-    E.editorBulkMenu.classList.remove("open");
-    E.editorBulkMore.setAttribute("aria-expanded", "false");
-    editorTable();
-  });
-  E.editorBulkDelete.addEventListener("click", () => {
-    if(!editorSelectedRows.size){ alert("Please select at least one row first."); return; }
-    const ok = confirm(`Delete ${editorSelectedRows.size} selected row(s)? This cannot be undone.`);
-    if(!ok) return;
-    data = data.filter((_, i) => !editorSelectedRows.has(i));
-    rawSalesRows = legacyMonthlyToRawRows(data);
-    editorSelectedRows.clear();
-    E.editorBulkMenu.classList.remove("open");
-    E.editorBulkMore.setAttribute("aria-expanded", "false");
-    applyAndSave();
-    scheduleSalesCloudSync(300);
-  });
-  document.addEventListener("click", ev => {
-    if(E.editorBulkMenu && !E.editorBulkMenu.contains(ev.target) && ev.target !== E.editorBulkMore){
-      E.editorBulkMenu.classList.remove("open");
-      E.editorBulkMore?.setAttribute("aria-expanded", "false");
-    }
-  });
-
+  salesEditor.bindEvents();
   E.reset.addEventListener("click", () => {
     selection.category = new Set();
     selection.brand = new Set();
@@ -1791,69 +1587,7 @@ function init(){
     }
   });
 
-  E.editBody.addEventListener("blur", ev => {
-    const td = ev.target;
-    if(!(td instanceof HTMLElement) || !td.matches("td[contenteditable]")) return;
-    const i = Number(td.dataset.i), k = td.dataset.k;
-    const brandText = td.querySelector(".brand-text");
-    const v = (brandText ? brandText.textContent : td.textContent || "").trim();
-    if(!Number.isFinite(i) || i < 0 || i >= data.length) return;
-    if(k === "saleUnits") data[i][k] = Math.max(0, Math.round(toNum(v) || 0));
-    else if(k === "price") data[i][k] = Math.max(0, toNum(v) || 0);
-    else data[i][k] = v;
-    data[i] = norm(data[i]);
-    rawSalesRows = legacyMonthlyToRawRows(data);
-    applyAndSave();
-    scheduleSalesCloudSync();
-  }, true);
-  E.editBody.addEventListener("click", ev => {
-    const rowSelect = ev.target instanceof Element ? ev.target.closest(".editor-row-select") : null;
-    if(rowSelect){
-      const i = Number(rowSelect.dataset.rowIndex);
-      if(Number.isFinite(i)){
-        if(rowSelect.checked) editorSelectedRows.add(i);
-        else editorSelectedRows.delete(i);
-        editorTable();
-      }
-      return;
-    }
-    const btn = ev.target instanceof Element ? ev.target.closest(".brand-color-trigger") : null;
-    if(!btn) return;
-    ev.preventDefault();
-    ev.stopPropagation();
-    openBrandColorPopover(btn.dataset.brand || "", btn);
-  });
-  E.exhibitionEditBody.addEventListener("blur", ev => {
-    const td = ev.target;
-    if(!(td instanceof HTMLElement) || !td.matches("td[contenteditable][data-ex-k]")) return;
-    const i = Number(td.dataset.exI);
-    const k = td.dataset.exK;
-    if(!Number.isFinite(i) || i < 0 || i >= exhibitions.length || !k) return;
-    exhibitions[i][k] = (td.textContent || "").trim();
-    exhibitions[i] = normalizeExhibition(exhibitions[i]);
-    applyExhibitionAndSave();
-  }, true);
-  E.exhibitionEditBody.addEventListener("click", ev => {
-    const btn = ev.target instanceof Element ? ev.target.closest("[data-exhibition-delete]") : null;
-    if(!btn) return;
-    const i = Number(btn.dataset.exhibitionDelete);
-    if(!Number.isFinite(i) || i < 0 || i >= exhibitions.length) return;
-    exhibitions.splice(i, 1);
-    applyExhibitionAndSave();
-  });
-  E.brandColorPopover.addEventListener("click", ev => ev.stopPropagation());
-  E.brandColorPopover.addEventListener("input", ev => {
-    const input = ev.target;
-    if(!(input instanceof HTMLInputElement) || input.type !== "color") return;
-    setBrandColor(input.dataset.brand || "", input.value);
-  });
-  E.brandColorPopover.addEventListener("click", ev => {
-    const swatch = ev.target instanceof Element ? ev.target.closest(".brand-color-swatch") : null;
-    if(!swatch) return;
-    setBrandColor(swatch.dataset.brand || "", swatch.dataset.color || "");
-    closeBrandColorPopover();
-  });
-  document.addEventListener("click", closeBrandColorPopover);
+
 
   E.csvLoad.addEventListener("click", () => {
     const file = E.csv.files && E.csv.files[0];
@@ -1870,7 +1604,7 @@ function init(){
         data = monthly;
         rawSalesRows = legacyMonthlyToRawRows(data);
         selectAllCurrentSalesFilters();
-        editorSelectedRows.clear();
+        salesEditor.clearSelection();
         saveState();
         renderAll();
         const uploaded = await upsertSupabaseSalesData(incomingMonthly);
@@ -1897,7 +1631,7 @@ function init(){
       selection.category = new Set();
       selection.brand = new Set();
       selection.product = new Set();
-      editorSelectedRows.clear();
+      salesEditor.clearSelection();
       applyAndSave();
       alert("All local and cloud sales data cleared. You can upload CSV again.");
     } catch(err) {
