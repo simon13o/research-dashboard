@@ -17,6 +17,7 @@ import { parseCsv as parseCSV } from "./data/csv.js";
 import { loadLocalJson, saveLocalJson } from "./data/storage.js";
 import { createSupabaseClient } from "./data/supabase.js";
 import { createSalesDataTools } from "./data/sales.js";
+import { createCloudSyncTools } from "./data/cloud-sync.js";
 import { createBrandPortfolioRenderer } from "./information/brands.js";
 import { createProductInformationRenderer } from "./information/products.js";
 import { createExhibitionTools } from "./information/exhibitions.js";
@@ -37,7 +38,6 @@ import { escapeHtml, escapeAttr, initials, safeUrl } from "./utils/text.js";
 const initialState = createInitialDashboardState();
 const supabase = createSupabaseClient({ url:SUPABASE_URL, publishableKey:SUPABASE_PUBLISHABLE_KEY });
 const {
-  headers:supabaseHeaders,
   fetchRows:fetchSupabaseRows,
   upsertRows:upsertSupabaseRows,
   deleteRows:deleteSupabaseRows,
@@ -290,157 +290,29 @@ function selectAllCurrentSalesFilters(){
 }
 async function loadSupabaseSalesData(){
   if(!SUPABASE_URL || !SUPABASE_PUBLISHABLE_KEY) return false;
-  const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?select=category,brand,product,time,sale_units,price&order=brand.asc,product.asc,time.asc`;
-  const res = await fetch(endpoint, { headers:supabaseHeaders() });
-  if(!res.ok){
-    const message = await res.text().catch(() => "");
-    throw new Error(`Supabase sales_data load failed: ${res.status} ${message}`);
-  }
-  const rows = await res.json();
-  if(!Array.isArray(rows)) return false;
-  data = rows.map(r => norm({
-    category:r.category,
-    brand:r.brand,
-    product:r.product,
-    time:r.time,
-    saleUnits:r.sale_units,
-    price:r.price
-  })).filter(r => r.brand || r.product || r.time);
+  const rows = await cloudSync.loadSales();
+  if(!rows) return false;
+  data = rows;
   rawSalesRows = legacyMonthlyToRawRows(data);
   if(!salesSelectionHasMatches()) selectAllCurrentSalesFilters();
-  const ms = months();
-  if(ms.length){
-    if(!ms.includes(E.from.value)) E.from.value = ms[0];
-    if(!ms.includes(E.to.value)) E.to.value = ms[ms.length - 1];
+  const availableMonths = months();
+  if(availableMonths.length){
+    if(!availableMonths.includes(E.from.value)) E.from.value = availableMonths[0];
+    if(!availableMonths.includes(E.to.value)) E.to.value = availableMonths[availableMonths.length - 1];
   }
   salesEditor.clearSelection();
   renderAll();
   saveState();
   return true;
 }
-function supabaseSalesPayload(rows){
-  return rows.map(norm).filter(r => r.brand || r.product || r.time).map(r => ({
-    category:r.category || "Other",
-    brand:r.brand || "",
-    product:r.product || "",
-    time:monthKey(r.time),
-    sale_units:Math.max(0, Math.round(Number(r.saleUnits) || 0)),
-    price:Number.isFinite(Number(r.price)) ? Math.max(0, Number(r.price)) : null,
-    source_file:"dashboard_csv_upload",
-    updated_at:new Date().toISOString()
-  })).filter(r => r.time);
-}
-async function upsertSupabaseSalesData(rows){
-  const payload = supabaseSalesPayload(rows);
-  if(!payload.length) return 0;
-  const chunkSize = 500;
-  let count = 0;
-  for(let i = 0; i < payload.length; i += chunkSize){
-    const chunk = payload.slice(i, i + chunkSize);
-    const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?on_conflict=category,brand,product,time`;
-    const res = await fetch(endpoint, {
-      method:"POST",
-      headers:{
-        ...supabaseHeaders(),
-        "Content-Type":"application/json",
-        Prefer:"resolution=merge-duplicates,return=minimal"
-      },
-      body:JSON.stringify(chunk)
-    });
-    if(!res.ok){
-      const message = await res.text().catch(() => "");
-      throw new Error(`Supabase sales_data upsert failed: ${res.status} ${message}`);
-    }
-    count += chunk.length;
-  }
-  return count;
-}
-async function clearSupabaseSalesData(){
-  const endpoint = `${SUPABASE_URL}/rest/v1/${SUPABASE_SALES_TABLE}?id=not.is.null`;
-  const res = await fetch(endpoint, {
-    method:"DELETE",
-    headers:{
-      ...supabaseHeaders(),
-      Prefer:"return=minimal"
-    }
-  });
-  if(!res.ok){
-    const message = await res.text().catch(() => "");
-    throw new Error(`Supabase sales_data clear failed: ${res.status} ${message}`);
-  }
-  return true;
-}
-function exhibitionRecordKey(r){
-  const row = normalizeExhibition(r);
-  return [row.showName, row.date, row.country, row.location].map(keyPart).join("||");
-}
-function supabaseExhibitionPayload(rows){
-  return rows.map(normalizeExhibition).filter(r => r.showName || r.date || r.country).map(r => ({
-    record_key:exhibitionRecordKey(r),
-    show_name:r.showName,
-    date:r.date || null,
-    country:r.country,
-    location:r.location,
-    sales_responsible:r.salesResponsible,
-    category:r.category,
-    business_model:r.businessModel,
-    attendance:r.attendance,
-    website:r.website,
-    remark:r.remark,
-    updated_at:new Date().toISOString()
-  })).filter(r => r.record_key);
-}
-function supabaseProductInfoPayload(){
-  return Object.entries(productIntro).map(([key, intro]) => {
-    const [brand = "", product = ""] = key.split("||");
-    return {
-      product_key:key,
-      brand,
-      product,
-      text:String(intro?.text || ""),
-      image_data_url:String(intro?.imageDataUrl || ""),
-      updated_at:new Date().toISOString()
-    };
-  }).filter(r => r.brand || r.product || r.text || r.image_data_url);
-}
-function supabaseBrandProfilePayload(rows){
-  return rows.map((profile, index) => ({
-    brand_id:String(profile.brand_id || brandProfileId(index)),
-    brand_name:String(profile.brand_name || ""),
-    hq_location:String(profile.hq_location || ""),
-    official_site:String(profile.official_site || ""),
-    key_products:Array.isArray(profile.key_products) ? profile.key_products : [],
-    contact_name:String(profile.contact_name || ""),
-    contact_position:String(profile.contact_position || ""),
-    phones:Array.isArray(profile.phones) ? profile.phones : [],
-    emails:Array.isArray(profile.emails) ? profile.emails : [],
-    updated_at:new Date().toISOString()
-  })).filter(r => r.brand_id && r.brand_name);
-}
-async function syncExhibitionsToSupabase(){
-  await clearSupabaseExhibitions();
-  await upsertSupabaseRows(SUPABASE_EXHIBITIONS_TABLE, supabaseExhibitionPayload(exhibitions), "record_key");
-}
-async function clearSupabaseExhibitions(){
-  await deleteSupabaseRows(SUPABASE_EXHIBITIONS_TABLE, "record_key=not.is.null");
-}
-async function syncProductInfoToSupabase(){
-  await upsertSupabaseRows(SUPABASE_PRODUCT_INFO_TABLE, supabaseProductInfoPayload(), "product_key");
-}
-async function syncBrandProfilesToSupabase(){
-  await upsertSupabaseRows(SUPABASE_BRAND_PROFILES_TABLE, supabaseBrandProfilePayload(brandProfiles), "brand_id");
-}
-async function deleteBrandProfileFromSupabase(profile){
-  const id = encodeURIComponent(String(profile?.brand_id || ""));
-  if(id) await deleteSupabaseRows(SUPABASE_BRAND_PROFILES_TABLE, `brand_id=eq.${id}`);
-}
-async function syncMarketReportToSupabase(){
-  await upsertSupabaseRows(SUPABASE_REPORTS_TABLE, [{
-    report_key:"main",
-    html_content:marketReportHtml || "",
-    updated_at:new Date().toISOString()
-  }], "report_key");
-}
+async function upsertSupabaseSalesData(rows){ return cloudSync.upsertSales(rows); }
+async function clearSupabaseSalesData(){ return cloudSync.clearSales(); }
+async function syncExhibitionsToSupabase(){ return cloudSync.syncExhibitions(exhibitions); }
+async function clearSupabaseExhibitions(){ return cloudSync.clearExhibitions(); }
+async function syncProductInfoToSupabase(){ return cloudSync.syncProductInfo(productIntro); }
+async function syncBrandProfilesToSupabase(){ return cloudSync.syncBrandProfiles(brandProfiles); }
+async function deleteBrandProfileFromSupabase(profile){ return cloudSync.deleteBrandProfile(profile); }
+async function syncMarketReportToSupabase(){ return cloudSync.syncMarketReport(marketReportHtml); }
 const {
   normalizeResearchReport,
   researchReportPayload,
@@ -477,32 +349,17 @@ async function deleteResearchReportFromSupabase(report){
 }
 async function loadSupabaseSecondaryData(){
   try {
-    const rows = await fetchSupabaseRows(SUPABASE_EXHIBITIONS_TABLE, "select=*&order=date.asc");
+    const rows = await cloudSync.loadExhibitions();
     if(rows){
-      exhibitions = rows.map(r => normalizeExhibition({
-        showName:r.show_name,
-        date:r.date,
-        country:r.country,
-        location:r.location,
-        salesResponsible:r.sales_responsible,
-        category:r.category,
-        businessModel:r.business_model,
-        attendance:r.attendance,
-        website:r.website,
-        remark:r.remark
-      })).filter(x => x.showName || x.date || x.country);
+      exhibitions = rows;
       if(activeTabId() === "edit" && activeDataEditorView() === "exhibitionData") renderExhibitionEditor();
       if(activeTabId() === "intro" && activeInfoView() === "exhibition") renderExhibitionView();
     }
   } catch(err){ console.warn(err); }
   try {
-    const rows = await fetchSupabaseRows(SUPABASE_PRODUCT_INFO_TABLE, "select=*");
+    const rows = await cloudSync.loadProductInfo();
     if(rows){
-      productIntro = {};
-      rows.forEach(r => {
-        const key = String(r.product_key || `${r.brand || ""}||${r.product || ""}`);
-        productIntro[key] = { text:String(r.text || ""), imageDataUrl:String(r.image_data_url || "") };
-      });
+      productIntro = rows;
       renderDashboard();
       if(activeTabId() === "intro" && activeInfoView() === "informationEditor"){
         renderIntroPreview();
@@ -511,26 +368,16 @@ async function loadSupabaseSecondaryData(){
     }
   } catch(err){ console.warn(err); }
   try {
-    const rows = await fetchSupabaseRows(SUPABASE_BRAND_PROFILES_TABLE, "select=*&order=brand_name.asc");
+    const rows = await cloudSync.loadBrandProfiles();
     if(rows){
-      brandProfiles = rows.map(r => ({
-        brand_id:r.brand_id,
-        brand_name:r.brand_name,
-        hq_location:r.hq_location,
-        official_site:r.official_site,
-        key_products:Array.isArray(r.key_products) ? r.key_products : [],
-        contact_name:r.contact_name,
-        contact_position:r.contact_position,
-        phones:Array.isArray(r.phones) ? r.phones : [],
-        emails:Array.isArray(r.emails) ? r.emails : []
-      })).filter(x => x.brand_name);
+      brandProfiles = rows;
       if(activeTabId() === "intro" && activeInfoView() === "brandPortfolio") renderBrandPortfolio();
     }
   } catch(err){ console.warn(err); }
   try {
-    const rows = await fetchSupabaseRows(SUPABASE_REPORTS_TABLE, "select=*&report_key=eq.main&limit=1");
-    if(rows && rows[0]){
-      marketReportHtml = String(rows[0].html_content || "");
+    const reportHtml = await cloudSync.loadMarketReport();
+    if(reportHtml != null){
+      marketReportHtml = reportHtml;
       if(E.marketReportEditor) E.marketReportEditor.innerHTML = marketReportHtml || defaultMarketReportHtml();
     }
   } catch(err){ console.warn(err); }
@@ -799,6 +646,22 @@ const {
   getExhibitions:() => exhibitions,
   getSelectedCountry:() => selectedExhibitionCountry,
   getShowPast:() => showPastExhibitions
+});
+
+const cloudSync = createCloudSyncTools({
+  client:{ fetchRows:fetchSupabaseRows, upsertRows:upsertSupabaseRows, deleteRows:deleteSupabaseRows },
+  tables:{
+    sales:SUPABASE_SALES_TABLE,
+    exhibitions:SUPABASE_EXHIBITIONS_TABLE,
+    productInfo:SUPABASE_PRODUCT_INFO_TABLE,
+    brandProfiles:SUPABASE_BRAND_PROFILES_TABLE,
+    reports:SUPABASE_REPORTS_TABLE
+  },
+  normalizeRow:norm,
+  monthKey,
+  normalizeExhibition,
+  keyPart,
+  brandProfileId
 });
 
 function applyExhibitionAndSave(){
