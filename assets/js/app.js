@@ -22,6 +22,7 @@ import { createSalesDataTools } from "./data/sales.js";
 import { createBrandPortfolioRenderer } from "./information/brands.js";
 import { createProductInformationRenderer } from "./information/products.js";
 import { createExhibitionTools } from "./information/exhibitions.js";
+import { createResearchLibraryTools } from "./information/research-library.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -576,49 +577,25 @@ async function syncMarketReportToSupabase(){
     updated_at:new Date().toISOString()
   }], "report_key");
 }
-function normalizeResearchReport(r = {}){
-  const tagsRaw = Array.isArray(r.tags) ? r.tags : String(r.tags || "").split(",");
-  return {
-    id:String(r.id || r.report_id || ""),
-    title:String(r.title || ""),
-    brand:String(r.brand || ""),
-    category:String(r.category || ""),
-    product:String(r.product || ""),
-    summary:String(r.summary || ""),
-    tags:tagsRaw.map(x => String(x || "").trim()).filter(Boolean),
-    pptShareUrl:String(r.ppt_share_url || r.pptShareUrl || ""),
-    pdfUrl:String(r.pdf_url || r.pdfUrl || ""),
-    coverImageUrl:String(r.cover_image_url || r.coverImageUrl || ""),
-    reportDate:String(r.report_date || r.reportDate || ""),
-    opportunityLevel:String(r.opportunity_level || r.opportunityLevel || ""),
-    sortOrder:Number(r.sort_order ?? r.sortOrder ?? 0) || 0,
-    isActive:r.is_active !== false
-  };
-}
-function researchReportPayload(report){
-  const r = normalizeResearchReport(report);
-  const payload = {
-    title:r.title,
-    brand:r.brand,
-    category:r.category,
-    product:r.product,
-    summary:r.summary,
-    tags:r.tags,
-    ppt_share_url:r.pptShareUrl,
-    pdf_url:r.pdfUrl,
-    cover_image_url:r.coverImageUrl,
-    report_date:r.reportDate || null,
-    opportunity_level:r.opportunityLevel,
-    sort_order:r.sortOrder,
-    is_active:r.isActive,
-    updated_at:new Date().toISOString()
-  };
-  if(r.id) payload.id = r.id;
-  return payload;
-}
-function researchTagList(value){
-  return String(value || "").split(",").map(x => x.trim()).filter(Boolean);
-}
+const {
+  normalizeResearchReport,
+  researchReportPayload,
+  researchTagList,
+  renderResearchLibrary,
+  getResearchReport,
+  openResearchPdf,
+  closeResearchPdf
+} = createResearchLibraryTools({
+  E,
+  escapeHtml,
+  escapeAttr,
+  initials,
+  safeUrl,
+  observeRevealCards,
+  getReports:() => researchReports,
+  getSearchText:() => researchSearchText
+});
+
 async function loadSupabaseResearchReports(){
   const rows = await fetchSupabaseRows(SUPABASE_RESEARCH_REPORTS_TABLE, "select=*&is_active=eq.true&order=sort_order.asc,report_date.desc,updated_at.desc");
   if(Array.isArray(rows)){
@@ -1495,71 +1472,6 @@ async function confirmDeleteBrand(){
     alert(`Brand profile cloud delete failed: ${err && err.message ? err.message : err}`);
   }
 }
-function researchMatchesFilters(report){
-  const q = researchSearchText.trim().toLowerCase();
-  if(!q) return true;
-  const haystack = [
-    report.title,
-    report.brand,
-    report.category,
-    report.product,
-    report.summary,
-    report.opportunityLevel,
-    ...(Array.isArray(report.tags) ? report.tags : [])
-  ].join(" ").toLowerCase();
-  return haystack.includes(q);
-}
-function renderResearchLibrary(){
-  if(!E.researchGrid) return;
-  const activeReports = researchReports.map(normalizeResearchReport).filter(r => r.isActive !== false && r.title);
-  const matched = activeReports.filter(researchMatchesFilters);
-  if(E.researchCount){
-    E.researchCount.textContent = researchSearchText.trim() ? `Matched: ${matched.length} / ${activeReports.length}` : `${activeReports.length} reports`;
-  }
-  if(E.researchEmpty) E.researchEmpty.hidden = Boolean(matched.length);
-  E.researchGrid.innerHTML = matched.map(report => {
-    const topTags = report.tags.slice(0, 2);
-    const topTagHtml = topTags.length
-      ? `<span class="research-tag-row">${topTags.map(tag => `<span class="research-tag-top" title="${escapeAttr(tag)}">${escapeHtml(tag)}</span>`).join("")}${report.tags.length > 2 ? `<span class="research-tag-more">+${report.tags.length - 2}</span>` : ""}</span>`
-      : `<span class="research-tag-row"><span class="research-tag-top">${escapeHtml(report.category || "Research")}</span></span>`;
-    const cover = report.coverImageUrl
-      ? `<img src="${escapeAttr(report.coverImageUrl)}" alt="${escapeAttr(report.title)} cover">`
-      : `<span>${escapeHtml(initials(report.title || "Report"))}</span>`;
-    const ppt = report.pptShareUrl ? safeUrl(report.pptShareUrl) : "";
-    const dateText = report.reportDate ? report.reportDate : "No date";
-    const levelKey = String(report.opportunityLevel || "").toLowerCase();
-    const levelIcon = levelKey === "high"
-      ? "★★★"
-      : levelKey === "low"
-        ? "★"
-        : "★★";
-    const levelTitle = report.opportunityLevel ? `${report.opportunityLevel} opportunity` : "Opportunity level not set";
-    return `
-      <article class="research-card reveal-card" data-research-card="${escapeAttr(report.id)}">
-        <div class="research-cover">${cover}</div>
-        <div class="research-body">
-          <div class="research-meta">
-            <span class="research-level-icon ${escapeAttr(levelKey || "medium")}" title="${escapeAttr(levelTitle)}">${levelIcon}</span>
-            ${topTagHtml}
-          </div>
-          <div class="research-meta"><span>${escapeHtml(dateText)}</span></div>
-          <h3 title="${escapeAttr(report.title)}">${escapeHtml(report.title)}</h3>
-          <p>${escapeHtml(report.summary || `${report.brand || "Market"} research report with PDF preview and PPT source link.`)}</p>
-          <div class="research-actions">
-            ${report.pdfUrl ? `<button class="primary" type="button" data-research-view="${escapeAttr(report.id)}">View PDF</button>` : ""}
-            ${ppt ? `<a href="${escapeAttr(ppt)}" target="_blank" rel="noopener">Open PPT</a>` : ""}
-            <button type="button" data-research-edit="${escapeAttr(report.id)}">Edit</button>
-            <button class="danger" type="button" data-research-delete="${escapeAttr(report.id)}">Delete</button>
-          </div>
-        </div>
-      </article>
-    `;
-  }).join("");
-  observeRevealCards(E.researchGrid);
-}
-function getResearchReport(id){
-  return researchReports.map(normalizeResearchReport).find(r => r.id === String(id));
-}
 function openResearchModal(report = null){
   if(!E.researchForm || !E.researchModal) return;
   const r = report ? normalizeResearchReport(report) : null;
@@ -1648,18 +1560,6 @@ async function deleteResearchReport(id){
   } catch(err){
     alert(`Research report cloud delete failed: ${err && err.message ? err.message : err}`);
   }
-}
-function openResearchPdf(report){
-  if(!report?.pdfUrl){ alert("No PDF preview has been uploaded for this report."); return; }
-  E.researchPdfTitle.textContent = report.title || "Research Report";
-  E.researchPdfFrame.src = report.pdfUrl;
-  E.researchPdfModal.classList.add("open");
-  E.researchPdfModal.setAttribute("aria-hidden", "false");
-}
-function closeResearchPdf(){
-  E.researchPdfModal.classList.remove("open");
-  E.researchPdfModal.setAttribute("aria-hidden", "true");
-  E.researchPdfFrame.src = "";
 }
 
 function init(){
