@@ -24,6 +24,7 @@ import { createProductInformationRenderer } from "./information/products.js";
 import { createExhibitionTools } from "./information/exhibitions.js";
 import { createResearchLibraryTools } from "./information/research-library.js";
 import { createMarketReportTools } from "./ui/market-report.js";
+import { createUiInteractions } from "./ui/interactions.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -83,7 +84,12 @@ const SIMPLE_WORLD_MAP_SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="784
 
 
 const selection = initialState.selection;
-const u = a => [...new Set(a)];
+const { observeRevealCards, bindTooltip } = createUiInteractions({
+  E,
+  escapeHtml,
+  getProductIntro:() => productIntro,
+  findProductIntro
+});const u = a => [...new Set(a)];
 const fN = v => new Intl.NumberFormat("en-US",{maximumFractionDigits:0}).format(v);
 const fC = v => new Intl.NumberFormat("en-US",{style:"currency",currency:"USD",maximumFractionDigits:0}).format(v);
 const toNum = v => Number(String(v??"").replace(/[$,]/g,"").trim());
@@ -747,33 +753,8 @@ let barGrowFrame = 0;
 let lineGrowId = 0;
 let lineGrowFrame = 0;
 let selectedCardObserver = null;
-let revealCardObserver = null;
 let selectedChartsFrame = 0;
 let selectedChartsToken = 0;
-function observeRevealCards(root, selector = ".reveal-card"){
-  if(!root) return;
-  const cards = [...root.querySelectorAll(selector)];
-  cards.forEach((card, idx) => {
-    card.classList.remove("is-visible");
-    card.style.setProperty("--reveal-delay", `${Math.min(idx, 12) * 55}ms`);
-  });
-  if(!cards.length) return;
-  if(!("IntersectionObserver" in window)){
-    cards.forEach(card => card.classList.add("is-visible"));
-    return;
-  }
-  if(!revealCardObserver){
-    revealCardObserver = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if(entry.isIntersecting){
-          entry.target.classList.add("is-visible");
-          revealCardObserver.unobserve(entry.target);
-        }
-      });
-    }, { threshold:.12, rootMargin:"0px 0px -8% 0px" });
-  }
-  cards.forEach(card => revealCardObserver.observe(card));
-}
 function barGrowTiming(delay = 0){
   return `data-bar-animate="true" dur="1.2s" begin="${Math.max(0, delay)}ms" fill="freeze" calcMode="spline" keyTimes="0;1" keySplines="${barGrowEase}"`;
 }
@@ -1683,60 +1664,7 @@ function init(){
     window.addEventListener("mouseup", mu);
   }
 
-  let lastTipKey = "";
-  const positionTooltip = e => {
-    const pad = 12;
-    E.tip.style.left = "0px";
-    E.tip.style.top = "0px";
-    const rect = E.tip.getBoundingClientRect();
-    let left = e.clientX + pad;
-    let top = e.clientY + pad;
-    if(left + rect.width > window.innerWidth - pad) left = e.clientX - rect.width - pad;
-    if(top + rect.height > window.innerHeight - pad) top = e.clientY - rect.height - pad;
-    E.tip.style.left = `${Math.max(pad, left)}px`;
-    E.tip.style.top = `${Math.max(pad, top)}px`;
-  };
-  document.addEventListener("mousemove", e => {
-    const target = e.target;
-    if(!(target instanceof Element)) return;
-    const introTitle = target.closest("h4[data-intro-key]");
-    if(introTitle){
-      const key = introTitle.getAttribute("data-intro-key") || "";
-      const [brand, product] = key.split("||");
-      const intro = productIntro[key] || findProductIntro(brand, product);
-      if(intro && intro.imageDataUrl){
-        if(lastTipKey !== `intro:${key}`){
-          E.tip.innerHTML = `<img src="${intro.imageDataUrl}" alt="product preview"><div style="max-width:200px">${escapeHtml((intro.text || "").slice(0, 80))}</div>`;
-          lastTipKey = `intro:${key}`;
-        }
-        E.tip.style.display = "block";
-        positionTooltip(e);
-        return;
-      }
-    }
-    const tipHtml = target.getAttribute("data-tip-html");
-    const tip = target.getAttribute("data-tip");
-    if(tipHtml){
-      if(lastTipKey !== `html:${tipHtml}`){
-        E.tip.innerHTML = tipHtml;
-        lastTipKey = `html:${tipHtml}`;
-      }
-      E.tip.style.display = "block";
-      positionTooltip(e);
-    } else if(tip){
-      if(lastTipKey !== `text:${tip}`){
-        E.tip.textContent = tip;
-        lastTipKey = `text:${tip}`;
-      }
-      E.tip.style.display = "block";
-      positionTooltip(e);
-    } else if(E.tip.style.display !== "none"){
-      E.tip.style.display = "none";
-      E.tip.innerHTML = "";
-      lastTipKey = "";
-    }
-  });
-  document.addEventListener("mouseleave", () => { E.tip.style.display = "none"; E.tip.innerHTML = ""; lastTipKey = ""; });
+  bindTooltip();
 
   [E.from, E.to, E.trendMode, E.prodCompareBy, E.prodRankMetric, E.prodMode].forEach(el => el.addEventListener("change", () => { renderAll(); saveState(); }));
   E.selectedProductsCharts.addEventListener("change", e => {
