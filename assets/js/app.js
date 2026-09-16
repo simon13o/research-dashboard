@@ -21,6 +21,7 @@ import { createSupabaseClient } from "./data/supabase.js";
 import { createSalesDataTools } from "./data/sales.js";
 import { createBrandPortfolioRenderer } from "./information/brands.js";
 import { createProductInformationRenderer } from "./information/products.js";
+import { createExhibitionTools } from "./information/exhibitions.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -1234,245 +1235,25 @@ function setBrandColor(brand, color){
   renderAll();
 }
 
-function normalizeExhibition(r){
-  const clean = v => String(v ?? "").trim();
-  return {
-    showName:clean(r.showName ?? r.show_name ?? r.exhibitionName ?? r.exhibition_name ?? r["Show Name"]),
-    date:normalizeTime(r.date ?? r.Date),
-    country:clean(r.country ?? r.Country),
-    location:clean(r.location ?? r.Location),
-    salesResponsible:clean(r.salesResponsible ?? r.sales_responsible ?? r.owner ?? r["Sales Responsible"]),
-    category:clean(r.category ?? r.Category),
-    businessModel:clean(r.businessModel ?? r.business_model ?? r.oem_odm ?? r["OEM/ODM"] ?? r["oem/odm"]),
-    attendance:clean(r.attendance ?? r.attendence ?? r.Attendance ?? r.Attendence),
-    website:clean(r.website ?? r.Website),
-    remark:clean(r.remark ?? r.remarks ?? r.notes ?? r.Remark)
-  };
-}
-function exhibitionCsvMap(rows){
-  const g = (r, keys) => { for(const k of keys) if(r[k] != null && String(r[k]).trim() !== "") return r[k]; return ""; };
-  return rows.map(r => normalizeExhibition({
-    showName:g(r,["show_name","show","exhibition_name","event_name","name"]),
-    date:g(r,["date","show_date","event_date"]),
-    country:g(r,["country","nation","market"]),
-    location:g(r,["location","city","venue","address"]),
-    salesResponsible:g(r,["sales_responsible","responsible","owner","sales","sales_person"]),
-    category:g(r,["category","product_category","type"]),
-    businessModel:g(r,["oem/odm","oem_odm","business_model","model"]),
-    attendance:g(r,["attendence","attendance","attended","join"]),
-    website:g(r,["website","url","link"]),
-    remark:g(r,["remark","remarks","notes","note"])
-  })).filter(x => x.showName || x.date || x.country);
-}
-function exhibitionKey(r){
-  return `${String(r.showName||"").toLowerCase()}||${String(r.date||"")}||${String(r.country||"").toLowerCase()}`;
-}
-function upsertExhibitions(existing, incoming){
-  const map = new Map(existing.map(r => [exhibitionKey(r), normalizeExhibition(r)]));
-  incoming.forEach(r => {
-    const row = normalizeExhibition(r);
-    if(row.showName || row.date || row.country) map.set(exhibitionKey(row), row);
-  });
-  return [...map.values()].sort((a,b) => String(a.date).localeCompare(String(b.date)) || String(a.showName).localeCompare(String(b.showName)));
-}
-function exhibitionDateLabel(v){
-  const t = normalizeTime(v);
-  return t || "-";
-}
-function exhibitionMonth(v){
-  const mk = monthKey(v);
-  return mk || "Unknown";
-}
-function exhibitionCountryCoords(country){
-  const key = String(country || "").toLowerCase().replace(/\./g,"").trim();
-  const coords = {
-    "us":[22,42], "usa":[22,42], "united states":[22,42], "united states of america":[22,42],
-    "canada":[20,27], "mexico":[19,54], "brazil":[33,72], "uk":[46,36], "united kingdom":[46,36],
-    "france":[48,42], "germany":[51,38], "italy":[52,47], "spain":[46,47], "netherlands":[50,36],
-    "china":[72,46], "hong kong":[75,53], "japan":[84,45], "singapore":[73,67], "thailand":[72,59],
-    "vietnam":[75,60], "indonesia":[76,72], "india":[65,56], "australia":[82,80], "uae":[59,53]
-  };
-  if(coords[key]) return coords[key];
-  const seed = Math.abs([...key].reduce((s,c)=>s+c.charCodeAt(0),0));
-  return [18 + (seed % 68), 28 + ((seed >> 3) % 48)];
-}
-function exhibitionCountryCode(country){
-  const key = String(country || "").toLowerCase().replace(/\./g,"").trim();
-  const map = {
-    "us":"us", "usa":"us", "united states":"us", "united states of america":"us",
-    "china":"cn", "mainland china":"cn", "prc":"cn",
-    "hk":"hk", "hong kong":"hk",
-    "japan":"jp", "singapore":"sg", "south korea":"kr", "korea":"kr",
-    "thailand":"th", "germany":"de", "saudi arabia":"sa", "taiwan":"tw",
-    "poland":"pl", "turkey":"tr", "austria":"at", "australia":"au",
-    "france":"fr", "italy":"it", "spain":"es", "united kingdom":"gb", "uk":"gb",
-    "canada":"ca", "mexico":"mx", "brazil":"br", "uae":"ae", "united arab emirates":"ae",
-    "vietnam":"vn", "india":"in", "indonesia":"id", "malaysia":"my", "netherlands":"nl"
-  };
-  return map[key] || key.slice(0,2);
-}
-function renderWorldMapSvg(countries){
-  const selectedCode = exhibitionCountryCode(selectedExhibitionCountry);
-  const codeToCountry = new Map();
-  countries.forEach(([country]) => {
-    const code = exhibitionCountryCode(country);
-    if(code) codeToCountry.set(code, country);
-  });
-  const decorate = (tag, id) => {
-    const country = codeToCountry.get(id);
-    const classes = ["world-country"];
-    if(country) classes.push("has-data");
-    if(country && id === selectedCode) classes.push("selected");
-    const data = country ? ` data-ex-country="${escapeAttr(country)}" data-tip="${escapeAttr(`${country}: exhibition country`)}"` : "";
-    return `<${tag} id="${id}" class="${classes.join(" ")}"${data}`;
-  };
-  return SIMPLE_WORLD_MAP_SVG
-    .replace("<svg ", `<svg class="simple-world-map" role="img" aria-label="World map with exhibition countries" `)
-    .replace(/<path id="([^"]+)"/g, (match, id) => decorate("path", id))
-    .replace(/<g id="([^"]+)"/g, (match, id) => decorate("g", id));
-}
-function countBy(rows, getter){
-  const map = new Map();
-  rows.forEach(r => {
-    const k = getter(r) || "Unknown";
-    map.set(k, (map.get(k) || 0) + 1);
-  });
-  return [...map.entries()].sort((a,b) => b[1] - a[1] || String(a[0]).localeCompare(String(b[0])));
-}
-function renderExhibitionBars(items, limit = 8){
-  const shown = items.slice(0, limit);
-  const max = Math.max(1, ...shown.map(x => x[1]));
-  return `<div class="exhibition-bars">${shown.map(([name,count]) => `
-    <div class="ex-bar-row">
-      <span title="${escapeAttr(name)}">${escapeHtml(name)}</span>
-      <span class="ex-bar-track"><span class="ex-bar-fill" style="display:block;width:${Math.max(6, count / max * 100)}%"></span></span>
-      <b>${count}</b>
-    </div>
-  `).join("")}</div>`;
-}
-function renderExhibitionEditor(){
-  if(!E.exhibitionEditBody) return;
-  E.exhibitionEditBody.innerHTML = exhibitions.map((r,i) => `
-    <tr>
-      <td contenteditable data-ex-i="${i}" data-ex-k="showName">${escapeHtml(r.showName)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="date">${escapeHtml(r.date)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="country">${escapeHtml(r.country)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="location">${escapeHtml(r.location)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="salesResponsible">${escapeHtml(r.salesResponsible)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="category">${escapeHtml(r.category)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="businessModel">${escapeHtml(r.businessModel)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="attendance">${escapeHtml(r.attendance)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="website">${escapeHtml(r.website)}</td>
-      <td contenteditable data-ex-i="${i}" data-ex-k="remark">${escapeHtml(r.remark)}</td>
-      <td><button type="button" data-exhibition-delete="${i}" style="width:auto;padding:6px 10px;color:#ef4444;background:#fff1f2;border-color:#fecaca">Delete</button></td>
-    </tr>
-  `).join("");
-}
-function renderExhibitionView(){
-  if(!E.exhibitionDashboard) return;
-  const allRows = exhibitions.map(normalizeExhibition).filter(x => x.showName || x.date || x.country);
-  if(!allRows.length){
-    E.exhibitionDashboard.innerHTML = `<div class="exhibition-panel"><h3>No exhibition data yet</h3><p>Upload exhibition CSV in Data Editor to populate this map, charts, and editable event list.</p></div>`;
-    return;
-  }
-  const today = new Date();
-  today.setHours(0,0,0,0);
-  const isPastExhibition = r => {
-    const d = new Date(normalizeTime(r.date));
-    if(Number.isNaN(d.getTime())) return false;
-    d.setHours(0,0,0,0);
-    return d < today;
-  };
-  const pastRows = allRows.filter(isPastExhibition);
-  const upcomingRows = allRows.filter(r => !isPastExhibition(r));
-  const rows = showPastExhibitions ? allRows : upcomingRows;
-  const selectedCountryLower = selectedExhibitionCountry.trim().toLowerCase();
-  const displayRows = selectedCountryLower ? rows.filter(r => String(r.country || "").trim().toLowerCase() === selectedCountryLower) : rows;
-  const countries = countBy(rows, r => r.country);
-  const categories = countBy(rows, r => r.category);
-  const monthsList = countBy(rows, r => exhibitionMonth(r.date)).sort((a,b) => String(a[0]).localeCompare(String(b[0])));
-  const models = countBy(rows, r => r.businessModel);
-  const attended = rows.filter(r => /^(yes|y|true|attend|attended)$/i.test(String(r.attendance || "").trim())).length;
-  const next = rows
-    .map(r => ({ row:r, d:new Date(r.date) }))
-    .filter(x => !Number.isNaN(x.d.getTime()) && x.d >= today)
-    .sort((a,b) => a.d - b.d)[0]?.row;
-  const pins = countries.map(([country,count]) => {
-    const [x,y] = exhibitionCountryCoords(country);
-    const size = Math.min(18, 7 + count * 2);
-    const active = selectedCountryLower && String(country).trim().toLowerCase() === selectedCountryLower;
-    return `<g class="map-pin ${active ? "is-active" : ""}" data-ex-country="${escapeAttr(country)}" data-tip="${escapeAttr(`${country}: ${count} show(s)`)}">
-      <circle cx="${x}" cy="${y}" r="${size}" fill="rgba(17,24,39,.10)"/>
-      <circle cx="${x}" cy="${y}" r="${Math.max(4,size*.45)}" fill="#111827"/>
-    </g>`;
-  }).join("");
-  const listRows = displayRows.slice().sort((a,b) => String(a.date).localeCompare(String(b.date))).map(r => `
-    <tr>
-      <td>${escapeHtml(r.showName || "-")}${isPastExhibition(r) ? `<span class="past-badge">Past</span>` : ""}</td>
-      <td>${escapeHtml(exhibitionDateLabel(r.date))}</td>
-      <td>${escapeHtml(r.country || "-")}</td>
-      <td>${escapeHtml(r.location || "-")}</td>
-      <td>${escapeHtml(r.category || "-")}</td>
-      <td>${escapeHtml(r.businessModel || "-")}</td>
-      <td>${r.website ? `<a href="${escapeAttr(safeUrl(r.website))}" target="_blank" rel="noreferrer">Website</a>` : "-"}</td>
-    </tr>
-  `).join("");
-  E.exhibitionDashboard.innerHTML = `
-    <div class="exhibition-toolbar">
-      <button type="button" class="exhibition-toggle-past" data-toggle-past-exhibitions>${showPastExhibitions ? "Hide Past Exhibitions" : `Show Past Exhibitions (${pastRows.length})`}</button>
-    </div>
-    <div class="exhibition-kpis">
-      <div class="exhibition-kpi"><small>${showPastExhibitions ? "Total Shows" : "Upcoming Shows"}</small><b>${rows.length}</b></div>
-      <div class="exhibition-kpi"><small>Countries</small><b>${countries.length}</b></div>
-      <div class="exhibition-kpi"><small>Attendence Yes</small><b>${attended}</b></div>
-      <div class="exhibition-kpi"><small>Next Show</small><b style="font-size:15px">${escapeHtml(next ? next.showName : "-")}</b></div>
-    </div>
-    <div class="exhibition-grid">
-      <section class="exhibition-panel">
-        <h3>Exhibition World Map</h3>
-        <p>${selectedExhibitionCountry ? `Filtering list by ${escapeHtml(selectedExhibitionCountry)}.` : "Click a country pin or chip to filter the exhibition list."}</p>
-        <div class="map-wrap">
-          ${renderWorldMapSvg(countries)}
-        </div>
-        <div class="map-attribution">Map source: <a href="https://github.com/flekschas/simple-world-map" target="_blank" rel="noreferrer">simple-world-map</a> by Fritz Lekschas / Al MacDonald.</div>
-        <div class="map-country-list">
-          <button type="button" class="country-chip clear ${selectedExhibitionCountry ? "" : "active"}" data-ex-country="">All Countries <b>${rows.length}</b></button>
-          ${countries.map(([c,n]) => {
-            const active = selectedCountryLower && String(c).trim().toLowerCase() === selectedCountryLower;
-            return `<button type="button" class="country-chip ${active ? "active" : ""}" data-ex-country="${escapeAttr(c)}">${escapeHtml(c)} <b>${n}</b></button>`;
-          }).join("")}
-        </div>
-      </section>
-      <section class="exhibition-panel">
-        <h3>Category Mix</h3>
-        <p>Shows grouped by product/category focus.</p>
-        ${renderExhibitionBars(categories)}
-      </section>
-    </div>
-    <div class="exhibition-grid">
-      <section class="exhibition-panel">
-        <h3>Monthly Exhibition Timeline</h3>
-        <p>Number of exhibitions by month.</p>
-        ${renderExhibitionBars(monthsList, 12)}
-      </section>
-      <section class="exhibition-panel">
-        <h3>OEM / ODM Mix</h3>
-        <p>Business model distribution from uploaded rows.</p>
-        ${renderExhibitionBars(models)}
-      </section>
-    </div>
-    <section class="exhibition-panel">
-      <h3>Exhibition List</h3>
-      <p>${selectedExhibitionCountry ? `${displayRows.length} exhibition(s) in ${escapeHtml(selectedExhibitionCountry)}.` : "Manage details in Data Editor. This list updates automatically."}</p>
-      <div class="exhibition-table-wrap">
-        <table>
-          <thead><tr><th>Show Name</th><th>Date</th><th>Country</th><th>Location</th><th>Category</th><th>OEM/ODM</th><th>Website</th></tr></thead>
-          <tbody>${listRows || `<tr><td colspan="7">No exhibitions for this country.</td></tr>`}</tbody>
-        </table>
-      </div>
-    </section>
-  `;
-}
+const {
+  normalizeExhibition,
+  exhibitionCsvMap,
+  upsertExhibitions,
+  renderExhibitionEditor,
+  renderExhibitionView
+} = createExhibitionTools({
+  E,
+  escapeHtml,
+  escapeAttr,
+  safeUrl,
+  normalizeTime,
+  monthKey,
+  worldMapSvg:SIMPLE_WORLD_MAP_SVG,
+  getExhibitions:() => exhibitions,
+  getSelectedCountry:() => selectedExhibitionCountry,
+  getShowPast:() => showPastExhibitions
+});
+
 function applyExhibitionAndSave(){
   exhibitions = exhibitions.map(normalizeExhibition).filter(x => x.showName || x.date || x.country);
   saveState();
