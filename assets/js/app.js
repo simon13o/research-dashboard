@@ -20,6 +20,7 @@ import { loadLocalJson, saveLocalJson } from "./data/storage.js";
 import { createSupabaseClient } from "./data/supabase.js";
 import { createSalesDataTools } from "./data/sales.js";
 import { createBrandPortfolioRenderer } from "./information/brands.js";
+import { createProductInformationRenderer } from "./information/products.js";
 import { createFilterControls } from "./dashboard/filters.js";
 import { createSalesTrendRenderer } from "./dashboard/sales-trend.js";
 import { createRankingRenderer } from "./dashboard/ranking.js";
@@ -1480,159 +1481,26 @@ function applyExhibitionAndSave(){
   syncExhibitionsToSupabase().catch(err => console.warn(err));
 }
 
-function productInfoRows(){
-  const rows = new Map();
-  data.forEach(item => {
-    const brand = item.brand || "";
-    const product = item.product || "";
-    if(!brand || !product) return;
-    const key = `${brand}||${product}`;
-    if(!rows.has(key)){
-      rows.set(key, {
-        key,
-        brand,
-        product,
-        category:item.category || "",
-        units:0,
-        revenue:0
-      });
-    }
-    const row = rows.get(key);
-    row.units += Number(item.units) || 0;
-    row.revenue += (Number(item.units) || 0) * (Number(item.price) || 0);
-    if(!row.category && item.category) row.category = item.category;
-  });
-  return [...rows.values()].sort((a,b) => a.brand.localeCompare(b.brand) || a.product.localeCompare(b.product));
-}
+const {
+  currentIntroKey,
+  renderProductInfoLibrary,
+  refreshIntroSelectors,
+  renderIntroPreview
+} = createProductInformationRenderer({
+  E,
+  unique:u,
+  escapeHtml,
+  escapeAttr,
+  getData:() => data,
+  getProductIntro:() => productIntro,
+  getEditMode:() => productInfoEditMode,
+  getSearchText:() => productInfoSearchText,
+  getCategoryFilter:() => productInfoCategoryFilter,
+  getBrandFilter:() => productInfoBrandFilter,
+  setCategoryFilter:value => { productInfoCategoryFilter = value; },
+  setBrandFilter:value => { productInfoBrandFilter = value; }
+});
 
-function renderProductInfoLibrary(){
-  if(!E.productInfoLibrary) return;
-  const rows = productInfoRows();
-  const categories = u(rows.map(x => x.category).filter(Boolean)).sort();
-  const brands = u(rows.map(x => x.brand).filter(Boolean)).sort();
-  if(E.productInfoCategoryFilter){
-    const current = categories.includes(productInfoCategoryFilter) ? productInfoCategoryFilter : "";
-    productInfoCategoryFilter = current;
-    E.productInfoCategoryFilter.innerHTML = `<option value="">All Categories</option>${categories.map(c => `<option value="${escapeAttr(c)}" ${c===current?"selected":""}>${escapeHtml(c)}</option>`).join("")}`;
-  }
-  if(E.productInfoBrandFilter){
-    const availableBrands = productInfoCategoryFilter ? u(rows.filter(x => x.category === productInfoCategoryFilter).map(x => x.brand).filter(Boolean)).sort() : brands;
-    const current = availableBrands.includes(productInfoBrandFilter) ? productInfoBrandFilter : "";
-    productInfoBrandFilter = current;
-    E.productInfoBrandFilter.innerHTML = `<option value="">All Brands</option>${availableBrands.map(b => `<option value="${escapeAttr(b)}" ${b===current?"selected":""}>${escapeHtml(b)}</option>`).join("")}`;
-  }
-  const q = productInfoSearchText.trim().toLowerCase();
-  const filteredRows = rows.filter(row => {
-    if(productInfoCategoryFilter && row.category !== productInfoCategoryFilter) return false;
-    if(productInfoBrandFilter && row.brand !== productInfoBrandFilter) return false;
-    if(!q) return true;
-    const intro = productIntro[row.key] || {};
-    const haystack = [row.product, row.brand, row.category, intro.text || ""].join(" ").toLowerCase();
-    return haystack.includes(q);
-  });
-  const currentKey = currentIntroKey();
-  if(E.productInfoCount) E.productInfoCount.textContent = (q || productInfoCategoryFilter || productInfoBrandFilter) ? `Matched: ${filteredRows.length} / ${rows.length}` : `${rows.length} product${rows.length === 1 ? "" : "s"}`;
-  if(!rows.length){
-    E.productInfoLibrary.innerHTML = `<div class="empty">Upload sales CSV first. Products will appear here automatically.</div>`;
-    return;
-  }
-  if(!filteredRows.length){
-    E.productInfoLibrary.innerHTML = `<div class="empty">No products match the current search or filter.</div>`;
-    return;
-  }
-  E.productInfoLibrary.innerHTML = filteredRows.map(row => {
-    const intro = productIntro[row.key] || {};
-    const hasInfo = Boolean(intro.imageDataUrl || intro.text);
-    const thumb = intro.imageDataUrl
-      ? `<img src="${intro.imageDataUrl}" alt="${escapeAttr(row.product)}">`
-      : escapeHtml((row.product || row.brand || "?").slice(0,1).toUpperCase());
-    return `
-      <button class="product-info-card ${row.key === currentKey ? "active" : ""}" type="button" data-product-info-key="${escapeAttr(row.key)}" data-brand="${escapeAttr(row.brand)}" data-product="${escapeAttr(row.product)}">
-        <span class="product-info-thumb">${thumb}</span>
-        <span class="product-info-main">
-          <strong title="${escapeAttr(row.product)}">${escapeHtml(row.product)}</strong>
-          <span>${escapeHtml(row.brand)}${row.category ? ` · ${escapeHtml(row.category)}` : ""}</span>
-        </span>
-        <span class="product-info-status ${hasInfo ? "" : "empty-state"}">${hasInfo ? "Saved" : "Empty"}</span>
-      </button>
-    `;
-  }).join("");
-}
-
-function refreshIntroSelectors(){
-  const brands = u(data.map(x => x.brand)).filter(Boolean).sort();
-  const currentBrand = E.introBrand.value;
-  E.introBrand.innerHTML = brands.map(b => `<option value="${escapeAttr(b)}" ${b===currentBrand?"selected":""}>${escapeHtml(b)}</option>`).join("");
-  if(!E.introBrand.value && brands.length) E.introBrand.value = brands[0];
-  const products = u(data.filter(x => x.brand === E.introBrand.value).map(x => x.product)).filter(Boolean).sort();
-  const currentProduct = E.introProduct.value;
-  E.introProduct.innerHTML = products.map(p => `<option value="${escapeAttr(p)}" ${p===currentProduct?"selected":""}>${escapeHtml(p)}</option>`).join("");
-  if(!E.introProduct.value && products.length) E.introProduct.value = products[0];
-  renderIntroPreview();
-  renderProductInfoLibrary();
-}
-
-function currentIntroKey(){
-  const b = E.introBrand.value || "";
-  const p = E.introProduct.value || "";
-  return b && p ? `${b}||${p}` : "";
-}
-
-function renderIntroPreview(){
-  const key = currentIntroKey();
-  const intro = key ? productIntro[key] : null;
-  const brand = E.introBrand.value || "";
-  const product = E.introProduct.value || "";
-  if(E.introEditForm) E.introEditForm.hidden = !productInfoEditMode;
-  if(E.introEditToggle){
-    const hasInfo = Boolean(intro && (intro.imageDataUrl || intro.text));
-    E.introEditToggle.textContent = hasInfo ? "Edit Product Info" : "Add Product Info";
-    E.introEditToggle.hidden = !key;
-  }
-  if(!key){
-    if(E.introDetail){
-      E.introDetail.innerHTML = `<div class="product-detail-empty"><div><b>No product selected</b><span>Upload sales CSV and choose a product from the library.</span></div></div>`;
-    }
-    E.introPreview.innerHTML = `<div class="empty">Select a product from the library to edit its information.</div>`;
-    E.introText.value = "";
-    return;
-  }
-  E.introText.value = intro ? (intro.text || "") : "";
-  const hasImage = Boolean(intro && intro.imageDataUrl);
-  const hasText = Boolean(intro && intro.text);
-  const imageBlock = hasImage
-    ? `<img src="${intro.imageDataUrl}" alt="${escapeAttr(product)}">`
-    : escapeHtml((product || brand || "?").slice(0,1).toUpperCase());
-  const notes = hasText
-    ? escapeHtml(intro.text)
-    : `<span style="color:#94a3b8">No product notes saved yet. Use Add Product Info to attach images and research notes.</span>`;
-  if(E.introDetail){
-    E.introDetail.innerHTML = `
-      <div class="product-detail-hero">
-        <div class="product-detail-image">${imageBlock}</div>
-        <div class="product-detail-copy">
-          <div class="product-detail-kicker">Product Research Profile</div>
-          <h3>${escapeHtml(product)}</h3>
-          <div class="product-detail-meta">
-            <span>${escapeHtml(brand)}</span>
-            ${(() => {
-              const match = data.find(x => x.brand === brand && x.product === product);
-              return match && match.category ? `<span>${escapeHtml(match.category)}</span>` : "";
-            })()}
-          </div>
-          <div class="product-detail-notes">${notes}</div>
-        </div>
-      </div>
-    `;
-  }
-  const img = hasImage ? `<img src="${intro.imageDataUrl}" alt="product image">` : "<div class='empty'>No image uploaded yet.</div>";
-  const txt = hasText ? `<div style="margin-top:8px">${escapeHtml(intro.text)}</div>` : "<div class='empty' style='margin-top:8px'>No product notes saved yet.</div>";
-  E.introPreview.innerHTML = `
-    <div style="font-weight:800;color:#0f172a;margin-bottom:8px">${escapeHtml(product)} <span style="color:#94a3b8;font-weight:700">(${escapeHtml(brand)})</span></div>
-    ${img}
-    ${txt}
-  `;
-}
 function findProductIntro(brand, product){
   const key = `${brand}||${product}`;
   const direct = productIntro[key];
